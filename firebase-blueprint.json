@@ -1,0 +1,639 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private student account record containing PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "displayName", "createdAt", "updatedAt"]
+    },
+    "StudentProfile": {
+      "title": "StudentProfile",
+      "description": "Public campus student profile for peer discovery and course matching without PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "university": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "program": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "yearOfStudy": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "bio": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "courses": {
+          "type": "array",
+          "description": "List of enrolled course codes (max 15)."
+        },
+        "studyInterests": {
+          "type": "array",
+          "description": "List of academic interests (max 10)."
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "isPublic": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "university", "program", "yearOfStudy", "courses", "isPublic", "createdAt", "updatedAt"]
+    },
+    "Enrollment": {
+      "title": "Enrollment",
+      "description": "Student's enrolled course with grade target and progress tracking.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "courseCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 24
+        },
+        "courseTitle": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 150
+        },
+        "instructor": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "credits": {
+          "type": "number"
+        },
+        "targetGrade": {
+          "type": "number"
+        },
+        "currentScore": {
+          "type": "number"
+        },
+        "completedModules": {
+          "type": "integer"
+        },
+        "totalModules": {
+          "type": "integer"
+        },
+        "semester": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "courseCode", "courseTitle", "credits", "targetGrade", "currentScore", "completedModules", "totalModules", "createdAt", "updatedAt"]
+    },
+    "PastQuestion": {
+      "title": "PastQuestion",
+      "description": "Shared university past exam paper or question set uploaded for students reading the same course.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "courseCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 24
+        },
+        "courseTitle": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 150
+        },
+        "university": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "examYear": {
+          "type": "integer"
+        },
+        "semester": {
+          "type": "string",
+          "enum": ["Fall", "Spring", "Summer", "Semester 1", "Semester 2"]
+        },
+        "examType": {
+          "type": "string",
+          "enum": ["Midterm", "Final", "Quiz", "Assignment", "Lab Exam"]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 180
+        },
+        "questionText": {
+          "type": "string",
+          "maxLength": 50000
+        },
+        "solutionText": {
+          "type": "string",
+          "maxLength": 50000
+        },
+        "fileName": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "fileMimeType": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "fileDataUrl": {
+          "type": "string",
+          "maxLength": 700000
+        },
+        "isPublic": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["authorId", "authorName", "courseCode", "courseTitle", "examYear", "semester", "examType", "title", "questionText", "isPublic", "createdAt", "updatedAt"]
+    },
+    "PastQuestionComment": {
+      "title": "PastQuestionComment",
+      "description": "Student discussion comment or worked solution on a past question.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["authorId", "authorName", "body", "createdAt"]
+    },
+    "StudyMaterial": {
+      "title": "StudyMaterial",
+      "description": "Shared lecture notes, slides, cheat sheets, or AI summaries for a course.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "courseCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 24
+        },
+        "courseTitle": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 150
+        },
+        "materialType": {
+          "type": "string",
+          "enum": ["Notes", "Slides", "Cheat Sheet", "Lab Guide", "Reading"]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 180
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "contentText": {
+          "type": "string",
+          "maxLength": 60000
+        },
+        "aiSummary": {
+          "type": "string",
+          "maxLength": 15000
+        },
+        "fileName": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "fileMimeType": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "fileDataUrl": {
+          "type": "string",
+          "maxLength": 700000
+        },
+        "externalUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["course", "public", "private"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["authorId", "authorName", "courseCode", "courseTitle", "materialType", "title", "contentText", "visibility", "createdAt", "updatedAt"]
+    },
+    "StudyTask": {
+      "title": "StudyTask",
+      "description": "Student task manager item.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "courseCode": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["todo", "in_progress", "done"]
+        },
+        "dueDate": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "estimatedMinutes": {
+          "type": "integer"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "title", "priority", "status", "createdAt", "updatedAt"]
+    },
+    "CalendarEvent": {
+      "title": "CalendarEvent",
+      "description": "Assignment deadline, exam date, or scheduled study block.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "courseCode": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "eventType": {
+          "type": "string",
+          "enum": ["assignment", "exam", "lecture", "study_session"]
+        },
+        "date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "startTime": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "title", "eventType", "date", "completed", "createdAt", "updatedAt"]
+    },
+    "StudyLog": {
+      "title": "StudyLog",
+      "description": "Logged focus or study session for progress analytics.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "courseCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "topic": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "durationMinutes": {
+          "type": "integer"
+        },
+        "loggedDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "courseCode", "durationMinutes", "loggedDate", "createdAt"]
+    },
+    "QuizAttempt": {
+      "title": "QuizAttempt",
+      "description": "Saved AI quiz score for retention tracking.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "courseCode": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "score": {
+          "type": "integer"
+        },
+        "totalQuestions": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "title", "score", "totalQuestions", "createdAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Direct peer-to-peer conversation between two students.",
+      "type": "object",
+      "properties": {
+        "participantIds": {
+          "type": "array",
+          "description": "Exactly 2 student UIDs."
+        },
+        "participantNames": {
+          "type": "array",
+          "description": "Display names of the 2 participants."
+        },
+        "lastMessage": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["participantIds", "participantNames", "lastMessage", "createdAt", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Message inside a peer conversation, optionally carrying a shared study material or past question.",
+      "type": "object",
+      "properties": {
+        "senderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "participantIds": {
+          "type": "array",
+          "description": "Bounded copy of the 2 participant UIDs for secure list enforcement."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "sharedResourceType": {
+          "type": "string",
+          "enum": ["material", "pastQuestion"]
+        },
+        "sharedResourceId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "sharedResourceTitle": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "sharedResourceCourse": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["senderId", "senderName", "participantIds", "text", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Private student account PII."
+    },
+    "/profiles/{userId}": {
+      "schema": { "$ref": "#/entities/StudentProfile" },
+      "description": "Public campus directory profile."
+    },
+    "/users/{userId}/enrollments/{enrollmentId}": {
+      "schema": { "$ref": "#/entities/Enrollment" },
+      "description": "Student enrolled courses and grade tracking."
+    },
+    "/pastQuestions/{questionId}": {
+      "schema": { "$ref": "#/entities/PastQuestion" },
+      "description": "Shared repository of university past exam papers."
+    },
+    "/pastQuestions/{questionId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/PastQuestionComment" },
+      "description": "Course peer discussion comments on a past question."
+    },
+    "/studyMaterials/{materialId}": {
+      "schema": { "$ref": "#/entities/StudyMaterial" },
+      "description": "Shared notes, slides, and study materials."
+    },
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/StudyTask" },
+      "description": "Personal study tasks."
+    },
+    "/users/{userId}/events/{eventId}": {
+      "schema": { "$ref": "#/entities/CalendarEvent" },
+      "description": "Personal assignment and exam calendar events."
+    },
+    "/users/{userId}/studyLogs/{logId}": {
+      "schema": { "$ref": "#/entities/StudyLog" },
+      "description": "Logged focus and study sessions."
+    },
+    "/users/{userId}/quizAttempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/QuizAttempt" },
+      "description": "Saved AI retention quiz scores."
+    },
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Direct peer-to-peer student conversations."
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages and shared study resources inside a conversation."
+    }
+  }
+}

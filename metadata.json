@@ -1,0 +1,8 @@
+{
+  "name": "Scholaryx",
+  "description": "University student study management platform with shared past questions, lecture notes and slides, AI note summarization and quiz generation, assignment and exam calendar, task manager, progress tracking, and peer study chat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
