@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { getInitials, normalizeCourseCode } from '../lib/utils';
 
 export function ProfilePage() {
-  const { user, profile, updateProfileData, theme, toggleTheme } = useAuth();
+  const { user, profile, updateProfileData, sendPasswordReset, theme, toggleTheme } = useAuth();
   const [displayName, setDisplayName] = useState('');
   const [university, setUniversity] = useState('');
   const [program, setProgram] = useState('');
@@ -17,6 +17,10 @@ export function ProfilePage() {
   const [isPublic, setIsPublic] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [resetSentNotice, setResetSentNotice] = useState<string | null>(null);
+  const [sendingReset, setSendingReset] = useState(false);
+
+  const usesPasswordAuth = Boolean(user?.providerData?.some((p) => p.providerId === 'password'));
 
   useEffect(() => {
     if (!profile) return;
@@ -65,6 +69,18 @@ export function ProfilePage() {
     }
   };
 
+  const handleSendPasswordReset = async () => {
+    if (!user?.email) return;
+    setSendingReset(true);
+    setResetSentNotice(null);
+    try {
+      await sendPasswordReset(user.email);
+      setResetSentNotice(`Password reset link sent to ${user.email}.`);
+    } finally {
+      setSendingReset(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-4xl space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-6 dark:border-slate-800">
@@ -88,18 +104,42 @@ export function ProfilePage() {
       </div>
 
       {/* Account Identity Header */}
-      <div className="flex flex-wrap items-center gap-5 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-blue-700 text-lg font-bold text-white">
-          {getInitials(displayName || user?.displayName || 'ST')}
+      <div className="flex flex-wrap items-center justify-between gap-5 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex min-w-0 flex-1 items-center gap-5">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-blue-700 text-lg font-bold text-white">
+            {getInitials(displayName || user?.displayName || 'ST')}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
+              {displayName || user?.displayName}
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Account Email: {user?.email} (private, never shown in public peer directory)
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Sign-in Method: {usesPasswordAuth ? 'Email & Password' : 'Google Account'} ·{' '}
+              <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                {user?.emailVerified ? 'Verified Email' : 'Verification Pending'}
+              </span>
+            </p>
+            {resetSentNotice && (
+              <p className="mt-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                {resetSentNotice}
+              </p>
+            )}
+          </div>
         </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
-            {displayName || user?.displayName}
-          </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Account Email: {user?.email} (private, never shown in public peer directory)
-          </p>
-        </div>
+
+        {usesPasswordAuth && user?.email && (
+          <button
+            type="button"
+            onClick={handleSendPasswordReset}
+            disabled={sendingReset}
+            className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+          >
+            {sendingReset ? 'Sending...' : 'Reset Password'}
+          </button>
+        )}
       </div>
 
       <form onSubmit={handleSave} className="space-y-6 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">

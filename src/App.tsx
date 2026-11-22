@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { EmailVerificationGate } from './components/EmailVerificationGate';
 import { getInitials } from './lib/utils';
 import { AIStudyStudioPage } from './pages/AIStudyStudioPage';
 import { CalendarPage } from './pages/CalendarPage';
@@ -139,6 +140,10 @@ function WorkspaceShell() {
 
   if (!user) {
     return <LandingAuth />;
+  }
+
+  if (!user.emailVerified) {
+    return <EmailVerificationGate />;
   }
 
   const handleSendToAIStudio = (prefill: StudioPrefill) => {
