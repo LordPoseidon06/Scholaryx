@@ -148,13 +148,18 @@ export async function parseAiResponse<T>(res: Response, fallbackMessage: string)
     } catch {
       if (res.status === 404) {
         throw new Error(
-          'AI backend endpoint was not found. Make sure the /api serverless functions and GEMINI_API_KEY are deployed.'
+          'AI backend endpoint was not found (HTTP 404). Make sure /api functions and GEMINI_API_KEY are deployed.'
         );
       }
+      const snippet = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
       if (!res.ok) {
-        throw new Error(fallbackMessage);
+        throw new Error(
+          `${fallbackMessage} (HTTP ${res.status}${snippet ? `: ${snippet}` : ''})`
+        );
       }
-      throw new Error('Unexpected response received from AI service.');
+      throw new Error(
+        `Unexpected non-JSON response from AI service (HTTP ${res.status}${snippet ? `: ${snippet}` : ''}).`
+      );
     }
   }
 

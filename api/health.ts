@@ -1,4 +1,4 @@
-import type { NodeReqLike, NodeResLike } from '../server/aiService';
+import { getConfiguredApiKey, type NodeReqLike, type NodeResLike } from './_aiService';
 
 export default function handler(_req: NodeReqLike, res: NodeResLike) {
   res.statusCode = 200;
@@ -6,10 +6,7 @@ export default function handler(_req: NodeReqLike, res: NodeResLike) {
   res.end(
     JSON.stringify({
       ok: true,
-      hasGeminiKey: Boolean(
-        process.env.GEMINI_API_KEY?.trim() &&
-          process.env.GEMINI_API_KEY.trim() !== 'MY_GEMINI_API_KEY'
-      ),
+      hasGeminiKey: Boolean(getConfiguredApiKey()),
     })
   );
 }
