@@ -197,7 +197,7 @@ export function LandingAuth() {
             <div className="space-y-5">
               <div className="flex items-center gap-3">
                 <img
-                  src="/src/assets/images/scholaris_crest_mark_1794794845025.jpg"
+                  src="/images/scholaris_crest_mark_1794794845025.jpg"
                   alt="Scholaryx academic emblem"
                   referrerPolicy="no-referrer"
                   className="h-11 w-11 rounded-lg border border-slate-200 object-cover dark:border-slate-800"
@@ -221,7 +221,7 @@ export function LandingAuth() {
 
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-200 dark:border-slate-800 dark:bg-slate-900">
               <img
-                src="/src/assets/images/campus_library_hero_1794794846363.jpg"
+                src="/images/campus_library_hero_1794794846363.jpg"
                 alt="University library study tables in morning daylight"
                 referrerPolicy="no-referrer"
                 className="h-56 w-full object-cover sm:h-64"

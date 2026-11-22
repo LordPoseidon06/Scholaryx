@@ -53,7 +53,7 @@ export function EmailVerificationGate() {
       <header className="mx-auto flex max-w-5xl items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-800">
         <div className="flex items-center gap-3">
           <img
-            src="/src/assets/images/scholaris_crest_mark_1794794845025.jpg"
+            src="/images/scholaris_crest_mark_1794794845025.jpg"
             alt="Scholaryx crest"
             referrerPolicy="no-referrer"
             className="h-8 w-8 rounded-md border border-slate-200 object-cover dark:border-slate-700"
