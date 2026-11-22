@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { deleteFileChunks, loadAttachmentDataUrl, splitDataUrlIntoChunks, uploadFileChunks } from '../lib/fileChunks';
 import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
-import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, readStudyFile } from '../lib/utils';
+import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, parseAiResponse, readStudyFile } from '../lib/utils';
 import type { ExamTypeOption, PastQuestion, PastQuestionComment, QuizAttempt, SemesterOption } from '../types';
 
 export interface StudioPrefill {
@@ -280,9 +280,11 @@ export function PastQuestionsPage({
           fileName: pq.fileName,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to explain question.');
-      setAiExplanation(data.explanation);
+      const data = await parseAiResponse<{ explanation?: string }>(
+        res,
+        'Failed to explain question.'
+      );
+      setAiExplanation(data.explanation || '');
     } catch (err) {
       setExplainError(err instanceof Error ? err.message : 'AI explanation failed.');
     } finally {

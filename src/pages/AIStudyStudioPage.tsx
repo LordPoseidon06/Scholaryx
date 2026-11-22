@@ -25,7 +25,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { loadAttachmentDataUrl } from '../lib/fileChunks';
 import { downloadQuizAsHtml, downloadQuizAsMarkdown } from '../lib/quizExport';
 import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
-import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, normalizeCourseCode, readStudyFile } from '../lib/utils';
+import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, normalizeCourseCode, parseAiResponse, readStudyFile } from '../lib/utils';
 import type { GeneratedFlashcard, GeneratedQuizQuestion, PastQuestion, QuizAttempt, StudyMaterial } from '../types';
 import type { StudioPrefill } from './PastQuestionsPage';
 
@@ -36,25 +36,6 @@ interface AIStudyStudioPageProps {
 
 function isSyntheticPlaceholder(text: string): boolean {
   return /^(Uploaded resource|Attached file):\s.+$/i.test(text.trim());
-}
-
-async function parseJsonOrError<T>(res: Response, fallbackMessage: string): Promise<T> {
-  const raw = await res.text();
-  let data: Record<string, unknown> = {};
-  if (raw) {
-    try {
-      data = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      if (!res.ok) {
-        throw new Error(fallbackMessage);
-      }
-      throw new Error('Unexpected response received from AI service.');
-    }
-  }
-  if (!res.ok) {
-    throw new Error(typeof data.error === 'string' && data.error ? data.error : fallbackMessage);
-  }
-  return data as T;
 }
 
 function buildSelectedAnswersArray(
@@ -365,7 +346,7 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
             focusMode,
           }),
         });
-        const data = await parseJsonOrError<{ summary?: string }>(res, 'Summarization failed.');
+        const data = await parseAiResponse<{ summary?: string }>(res, 'Summarization failed.');
         if (!data.summary) throw new Error('AI returned an empty summary.');
         setSummaryResult(data.summary);
       } else if (mode === 'quiz') {
@@ -383,7 +364,7 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
             difficulty,
           }),
         });
-        const data = await parseJsonOrError<{
+        const data = await parseAiResponse<{
           quizTitle?: string;
           questions?: GeneratedQuizQuestion[];
         }>(res, 'Quiz generation failed.');
@@ -410,7 +391,7 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
             cardCount,
           }),
         });
-        const data = await parseJsonOrError<{ cards?: GeneratedFlashcard[] }>(
+        const data = await parseAiResponse<{ cards?: GeneratedFlashcard[] }>(
           res,
           'Flashcards generation failed.'
         );

@@ -127,3 +127,40 @@ export async function readStudyFile(file: File): Promise<ParsedUploadResult> {
     fileDataUrl: dataUrl,
   };
 }
+
+export async function parseAiResponse<T>(res: Response, fallbackMessage: string): Promise<T> {
+  if (res.status === 413) {
+    throw new Error(
+      'This attachment exceeds the 4.5 MB serverless request limit. Paste key text excerpts or use a smaller PDF/image (under 3 MB).'
+    );
+  }
+  if (res.status === 504) {
+    throw new Error(
+      'The AI request timed out on the server. Try fewer quiz questions or a shorter excerpt.'
+    );
+  }
+
+  const raw = await res.text();
+  let data: Record<string, unknown> = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      if (res.status === 404) {
+        throw new Error(
+          'AI backend endpoint was not found. Make sure the /api serverless functions and GEMINI_API_KEY are deployed.'
+        );
+      }
+      if (!res.ok) {
+        throw new Error(fallbackMessage);
+      }
+      throw new Error('Unexpected response received from AI service.');
+    }
+  }
+
+  if (!res.ok) {
+    throw new Error(typeof data.error === 'string' && data.error ? data.error : fallbackMessage);
+  }
+  return data as T;
+}
+

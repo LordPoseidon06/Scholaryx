@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { deleteFileChunks, loadAttachmentDataUrl, splitDataUrlIntoChunks, uploadFileChunks } from '../lib/fileChunks';
 import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
-import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, readStudyFile } from '../lib/utils';
+import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, parseAiResponse, readStudyFile } from '../lib/utils';
 import type { MaterialTypeOption, MaterialVisibility, StudyMaterial } from '../types';
 import type { StudioPrefill } from './PastQuestionsPage';
 
@@ -262,8 +262,7 @@ export function StudyMaterialsPage({
           focusMode: 'standard',
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to summarize.');
+      const data = await parseAiResponse<{ summary?: string }>(res, 'Failed to summarize.');
       const generated = clampString(data.summary || '', 15000);
       setPreviewSummary(generated);
 
