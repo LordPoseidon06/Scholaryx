@@ -111,8 +111,15 @@ function parseApiError(error: unknown): {
     lower.includes('model not found') ||
     (status === 400 && lower.includes('thinking') && lower.includes('not supported'));
 
+  const isTimeout =
+    (error instanceof Error &&
+      (error.name === 'TimeoutError' || error.name === 'AbortError')) ||
+    lower.includes('timeout') ||
+    lower.includes('aborted');
+
   const retryable =
     modelNotFound ||
+    isTimeout ||
     status === 503 ||
     status === 429 ||
     status === 502 ||
@@ -178,6 +185,7 @@ async function generateWithRetryAndFallback(
   request: {
     contents: { parts: GeminiContentPart[] };
     config?: Record<string, unknown>;
+    timeoutMs?: number;
   }
 ) {
   const customModel = process.env.GEMINI_MODEL?.trim();
@@ -200,23 +208,28 @@ async function generateWithRetryAndFallback(
 
   let lastError: unknown;
   let sawModelNotFound = false;
+  let sawTimeout = false;
+  const perAttemptTimeoutMs = request.timeoutMs ?? 20_000;
 
   for (const attempt of attempts) {
     if (attempt.onlyOnNotFound && !sawModelNotFound) {
       continue;
     }
-    if (attempt.skipIfModelNotFound && sawModelNotFound) {
+    if (attempt.skipIfModelNotFound && (sawModelNotFound || sawTimeout)) {
       continue;
     }
-    if (attempt.delayMs > 0 && !sawModelNotFound) {
+    if (attempt.delayMs > 0 && !sawModelNotFound && !sawTimeout) {
       await sleep(attempt.delayMs);
     }
     try {
-      const config = { ...(request.config || {}) };
+      const config: Record<string, unknown> = { ...(request.config || {}) };
       if (attempt.useLowThinking) {
         config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
       } else {
         delete config.thinkingConfig;
+      }
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        config.abortSignal = AbortSignal.timeout(perAttemptTimeoutMs);
       }
 
       const response = await ai.models.generateContent({
@@ -234,6 +247,10 @@ async function generateWithRetryAndFallback(
       const parsed = parseApiError(err);
       if (parsed.modelNotFound) {
         sawModelNotFound = true;
+        continue;
+      }
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        sawTimeout = true;
         continue;
       }
       if (!parsed.retryable) {
@@ -600,6 +617,7 @@ export async function processQuiz(body: Record<string, unknown>): Promise<AiHand
 
     const response = await generateWithRetryAndFallback(ai, {
       contents: { parts },
+      timeoutMs: count >= 25 ? 50_000 : 22_000,
       config: {
         systemInstruction:
           'You are a university professor crafting rigorous active-recall practice questions. Always return valid JSON matching the schema with all requested questions.',
