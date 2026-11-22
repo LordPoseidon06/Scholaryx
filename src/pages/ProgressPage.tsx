@@ -1,16 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore';
-import { Award, BookOpen, Clock, Plus, Trash2, TrendingUp, X } from 'lucide-react';
+import { Award, BookOpen, CheckCircle2, Clock, Download, Eye, Plus, RotateCw, Trash2, TrendingUp, X, XCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { downloadQuizAsHtml, downloadQuizAsMarkdown } from '../lib/quizExport';
 import { clampString, formatTimestamp, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
 import type { Enrollment, QuizAttempt, StudyLog } from '../types';
 
-export function ProgressPage() {
+interface ProgressPageProps {
+  onReviewQuiz?: (attempt: QuizAttempt) => void;
+}
+
+export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
   const { user, profile } = useAuth();
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [studyLogs, setStudyLogs] = useState<StudyLog[]>([]);
   const [quizAttempts, setQuizAttempts] = useState<QuizAttempt[]>([]);
+  const [reviewingQuiz, setReviewingQuiz] = useState<QuizAttempt | null>(null);
 
   // Course modal
   const [showAddCourse, setShowAddCourse] = useState(false);
@@ -157,10 +163,21 @@ export function ProgressPage() {
     totalCredits > 0
       ? enrollments.reduce((acc, e) => acc + e.currentScore * e.credits, 0) / totalCredits
       : 0;
+  const gradedQuizzes = quizAttempts.filter((q) => q.isGraded !== false);
   const avgQuizScore =
-    quizAttempts.length > 0
-      ? Math.round(quizAttempts.reduce((acc, q) => acc + q.score, 0) / quizAttempts.length)
+    gradedQuizzes.length > 0
+      ? Math.round(gradedQuizzes.reduce((acc, q) => acc + q.score, 0) / gradedQuizzes.length)
       : 0;
+
+  const handleDeleteQuizAttempt = async (id: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'quizAttempts', id));
+      if (reviewingQuiz?.id === id) setReviewingQuiz(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}/quizAttempts/${id}`);
+    }
+  };
   const totalMinutesLogged = studyLogs.reduce((acc, l) => acc + l.durationMinutes, 0);
 
   // Build 7-day study bar chart data
@@ -224,10 +241,10 @@ export function ProgressPage() {
         <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">AI Quiz Retention Avg</p>
           <p className="mt-2 font-mono text-3xl font-semibold text-slate-900 tabular-nums dark:text-slate-100">
-            {quizAttempts.length > 0 ? `${avgQuizScore}%` : '—'}
+            {gradedQuizzes.length > 0 ? `${avgQuizScore}%` : '—'}
           </p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {quizAttempts.length} completed practice quizzes
+            {gradedQuizzes.length} graded quizzes · {quizAttempts.length} total saved
           </p>
         </div>
       </div>
@@ -483,25 +500,209 @@ export function ProgressPage() {
                   <th className="py-3 font-medium text-right">Questions</th>
                   <th className="py-3 font-medium text-right">Score</th>
                   <th className="py-3 font-medium text-right">Date</th>
+                  <th className="py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {quizAttempts.map((q) => (
-                  <tr key={q.id}>
-                    <td className="py-3 font-medium text-slate-900 dark:text-slate-100">{q.title}</td>
-                    <td className="py-3 font-mono text-slate-600 dark:text-slate-300">{q.courseCode || '—'}</td>
-                    <td className="py-3 text-right font-mono tabular-nums">{q.totalQuestions}</td>
-                    <td className="py-3 text-right font-mono font-semibold tabular-nums text-blue-700 dark:text-blue-400">
-                      {q.score}%
-                    </td>
-                    <td className="py-3 text-right text-slate-500">{formatTimestamp(q.createdAt)}</td>
-                  </tr>
-                ))}
+                {quizAttempts.map((q) => {
+                  const hasQuestions = Boolean(q.questions && q.questions.length > 0);
+                  return (
+                    <tr key={q.id}>
+                      <td className="py-3 font-medium text-slate-900 dark:text-slate-100">{q.title}</td>
+                      <td className="py-3 font-mono text-slate-600 dark:text-slate-300">{q.courseCode || '—'}</td>
+                      <td className="py-3 text-right font-mono tabular-nums">{q.totalQuestions}</td>
+                      <td className="py-3 text-right font-mono font-semibold tabular-nums text-blue-700 dark:text-blue-400">
+                        {q.isGraded === false ? (
+                          <span className="font-sans text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                            Saved (Ungraded)
+                          </span>
+                        ) : (
+                          `${q.score}%`
+                        )}
+                      </td>
+                      <td className="py-3 text-right text-slate-500">{formatTimestamp(q.createdAt)}</td>
+                      <td className="py-3 text-right">
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          {hasQuestions ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setReviewingQuiz(q)}
+                                className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                                title="Review quiz questions and explanations"
+                              >
+                                <Eye className="h-3 w-3" />
+                                Review
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  downloadQuizAsHtml({
+                                    title: q.title,
+                                    courseCode: q.courseCode,
+                                    difficulty: q.difficulty,
+                                    questions: q.questions || [],
+                                    answers: q.selectedAnswers,
+                                    isGraded: q.isGraded !== false,
+                                    scorePercent: q.score,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                                title="Download HTML quiz sheet"
+                              >
+                                <Download className="h-3 w-3" />
+                                Download
+                              </button>
+                            </>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">Score only</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteQuizAttempt(q.id)}
+                            className="rounded p-1 text-slate-400 hover:text-red-600"
+                            title="Delete quiz record"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {/* Quiz Review Modal */}
+      {reviewingQuiz && reviewingQuiz.questions && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
+          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 p-6 dark:border-slate-800">
+              <div>
+                <p className="font-mono text-xs font-semibold text-blue-700 dark:text-blue-400">
+                  {reviewingQuiz.courseCode || 'QUIZ'}
+                  {reviewingQuiz.difficulty ? ` · ${reviewingQuiz.difficulty}` : ''}
+                  {reviewingQuiz.isGraded === false
+                    ? ' · Saved (Ungraded)'
+                    : ` · Score: ${reviewingQuiz.score}%`}
+                </p>
+                <h2 className="mt-1 font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+                  {reviewingQuiz.title}
+                </h2>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadQuizAsHtml({
+                      title: reviewingQuiz.title,
+                      courseCode: reviewingQuiz.courseCode,
+                      difficulty: reviewingQuiz.difficulty,
+                      questions: reviewingQuiz.questions || [],
+                      answers: reviewingQuiz.selectedAnswers,
+                      isGraded: reviewingQuiz.isGraded !== false,
+                      scorePercent: reviewingQuiz.score,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download HTML
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadQuizAsMarkdown({
+                      title: reviewingQuiz.title,
+                      courseCode: reviewingQuiz.courseCode,
+                      difficulty: reviewingQuiz.difficulty,
+                      questions: reviewingQuiz.questions || [],
+                      answers: reviewingQuiz.selectedAnswers,
+                      isGraded: reviewingQuiz.isGraded !== false,
+                      scorePercent: reviewingQuiz.score,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  .MD
+                </button>
+                {onReviewQuiz && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = reviewingQuiz;
+                      setReviewingQuiz(null);
+                      onReviewQuiz(target);
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    {reviewingQuiz.isGraded === false ? 'Resume in Studio' : 'Open in Studio'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setReviewingQuiz(null)}
+                  className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 space-y-5 overflow-y-auto p-6">
+              {reviewingQuiz.questions.map((q, idx) => {
+                const picked = reviewingQuiz.selectedAnswers?.[idx];
+                return (
+                  <div key={idx} className="space-y-2.5 border-b border-slate-100 pb-5 last:border-b-0 dark:border-slate-800">
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      <span className="mr-2 font-mono text-xs text-slate-500 tabular-nums">
+                        {String(idx + 1).padStart(2, '0')}.
+                      </span>
+                      {q.question}
+                    </p>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {q.options.map((opt, optIdx) => {
+                        const isPicked = picked === optIdx;
+                        const isCorrect = q.correctIndex === optIdx;
+                        let cls =
+                          'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300';
+                        if (isCorrect) {
+                          cls =
+                            'border-emerald-500 bg-emerald-50 text-emerald-900 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200';
+                        } else if (isPicked && !isCorrect) {
+                          cls =
+                            'border-red-400 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200';
+                        }
+                        return (
+                          <div
+                            key={optIdx}
+                            className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs font-medium ${cls}`}
+                          >
+                            <span>{opt}</span>
+                            {isCorrect && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />}
+                            {isPicked && !isCorrect && <XCircle className="h-4 w-4 shrink-0 text-red-600" />}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {q.explanation && (
+                      <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+                        Explanation: {q.explanation}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Course Modal */}
       {showAddCourse && (

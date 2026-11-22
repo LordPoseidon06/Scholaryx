@@ -86,7 +86,7 @@ service cloud.firestore {
 
     function isValidPastQuestion(data) {
       return data.keys().hasAll(['authorId', 'authorName', 'courseCode', 'courseTitle', 'examYear', 'semester', 'examType', 'title', 'questionText', 'isPublic', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['authorId', 'authorName', 'courseCode', 'courseTitle', 'university', 'examYear', 'semester', 'examType', 'title', 'questionText', 'solutionText', 'fileName', 'fileMimeType', 'fileDataUrl', 'isPublic', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['authorId', 'authorName', 'courseCode', 'courseTitle', 'university', 'examYear', 'semester', 'examType', 'title', 'questionText', 'solutionText', 'fileName', 'fileMimeType', 'fileDataUrl', 'fileSizeBytes', 'fileChunkCount', 'isPublic', 'createdAt', 'updatedAt'])
         && isValidId(data.authorId)
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120
         && data.courseCode is string && data.courseCode.size() >= 2 && data.courseCode.size() <= 24
@@ -101,6 +101,8 @@ service cloud.firestore {
         && (!('fileName' in data) || (data.fileName is string && data.fileName.size() <= 180))
         && (!('fileMimeType' in data) || (data.fileMimeType is string && data.fileMimeType.size() <= 100))
         && (!('fileDataUrl' in data) || (data.fileDataUrl is string && data.fileDataUrl.size() <= 700000))
+        && (!('fileSizeBytes' in data) || (data.fileSizeBytes is int && data.fileSizeBytes >= 0 && data.fileSizeBytes <= 104857600))
+        && (!('fileChunkCount' in data) || (data.fileChunkCount is int && data.fileChunkCount >= 0 && data.fileChunkCount <= 250))
         && data.isPublic is bool
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -115,9 +117,18 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidFileChunk(data) {
+      return data.keys().hasAll(['authorId', 'chunkIndex', 'data', 'isReadablePublicly'])
+        && data.keys().hasOnly(['authorId', 'chunkIndex', 'data', 'isReadablePublicly'])
+        && isValidId(data.authorId)
+        && data.chunkIndex is int && data.chunkIndex >= 0 && data.chunkIndex <= 250
+        && data.data is string && data.data.size() >= 1 && data.data.size() <= 650000
+        && data.isReadablePublicly is bool;
+    }
+
     function isValidStudyMaterial(data) {
       return data.keys().hasAll(['authorId', 'authorName', 'courseCode', 'courseTitle', 'materialType', 'title', 'contentText', 'visibility', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['authorId', 'authorName', 'courseCode', 'courseTitle', 'materialType', 'title', 'description', 'contentText', 'aiSummary', 'fileName', 'fileMimeType', 'fileDataUrl', 'externalUrl', 'visibility', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['authorId', 'authorName', 'courseCode', 'courseTitle', 'materialType', 'title', 'description', 'contentText', 'aiSummary', 'fileName', 'fileMimeType', 'fileDataUrl', 'fileSizeBytes', 'fileChunkCount', 'externalUrl', 'visibility', 'createdAt', 'updatedAt'])
         && isValidId(data.authorId)
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120
         && data.courseCode is string && data.courseCode.size() >= 2 && data.courseCode.size() <= 24
@@ -130,6 +141,8 @@ service cloud.firestore {
         && (!('fileName' in data) || (data.fileName is string && data.fileName.size() <= 180))
         && (!('fileMimeType' in data) || (data.fileMimeType is string && data.fileMimeType.size() <= 100))
         && (!('fileDataUrl' in data) || (data.fileDataUrl is string && data.fileDataUrl.size() <= 700000))
+        && (!('fileSizeBytes' in data) || (data.fileSizeBytes is int && data.fileSizeBytes >= 0 && data.fileSizeBytes <= 104857600))
+        && (!('fileChunkCount' in data) || (data.fileChunkCount is int && data.fileChunkCount >= 0 && data.fileChunkCount <= 250))
         && (!('externalUrl' in data) || (data.externalUrl is string && data.externalUrl.size() <= 500))
         && data.visibility in ['course', 'public', 'private']
         && data.createdAt is timestamp
@@ -180,13 +193,18 @@ service cloud.firestore {
 
     function isValidQuizAttempt(data) {
       return data.keys().hasAll(['ownerId', 'title', 'score', 'totalQuestions', 'createdAt'])
-        && data.keys().hasOnly(['ownerId', 'title', 'courseCode', 'score', 'totalQuestions', 'createdAt'])
+        && data.keys().hasOnly(['ownerId', 'title', 'courseCode', 'difficulty', 'score', 'totalQuestions', 'isGraded', 'questions', 'selectedAnswers', 'createdAt', 'updatedAt'])
         && isValidId(data.ownerId)
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 180
         && (!('courseCode' in data) || (data.courseCode is string && data.courseCode.size() <= 24))
+        && (!('difficulty' in data) || (data.difficulty is string && data.difficulty.size() <= 40))
         && data.score is int && data.score >= 0 && data.score <= 100
         && data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 100
-        && data.createdAt is timestamp;
+        && (!('isGraded' in data) || data.isGraded is bool)
+        && (!('questions' in data) || (data.questions is list && data.questions.size() <= 50 && (data.questions.size() == 0 || (data.questions[0] is map && 'question' in data.questions[0] && data.questions[0].question is string && data.questions[0].question.size() <= 2000 && 'options' in data.questions[0] && data.questions[0].options is list && data.questions[0].options.size() <= 6 && 'correctIndex' in data.questions[0] && data.questions[0].correctIndex is int))))
+        && (!('selectedAnswers' in data) || (data.selectedAnswers is list && data.selectedAnswers.size() <= 50 && (data.selectedAnswers.size() == 0 || data.selectedAnswers[0] is int)))
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
 
     function isValidConversation(data) {
@@ -312,7 +330,7 @@ service cloud.firestore {
         allow delete: if isValidId(userId) && isValidId(logId) && isVerified() && isOwner(userId);
       }
 
-      // 1e. Quiz Retention Attempts
+      // 1e. Quiz Retention Attempts & Saved Quizzes
       match /quizAttempts/{attemptId} {
         allow get: if isValidId(userId) && isValidId(attemptId) && isOwner(userId) && existing().ownerId == request.auth.uid;
         allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
@@ -320,8 +338,16 @@ service cloud.firestore {
           && isValidQuizAttempt(incoming())
           && incoming().ownerId == userId
           && incoming().createdAt == request.time
+          && (!('updatedAt' in incoming()) || incoming().updatedAt == request.time)
           && exists(/databases/$(database)/documents/users/$(userId));
-        allow update: if false;
+        allow update: if isValidId(userId) && isValidId(attemptId) && isVerified() && isOwner(userId)
+          && isValidQuizAttempt(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().title == existing().title
+          && incoming().totalQuestions == existing().totalQuestions
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['score', 'isGraded', 'selectedAnswers', 'updatedAt']);
         allow delete: if isValidId(userId) && isValidId(attemptId) && isVerified() && isOwner(userId);
       }
     }
@@ -359,7 +385,7 @@ service cloud.firestore {
         && incoming().authorId == existing().authorId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['courseCode', 'courseTitle', 'university', 'examYear', 'semester', 'examType', 'title', 'questionText', 'solutionText', 'fileName', 'fileMimeType', 'fileDataUrl', 'isPublic', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['courseCode', 'courseTitle', 'university', 'examYear', 'semester', 'examType', 'title', 'questionText', 'solutionText', 'fileName', 'fileMimeType', 'fileDataUrl', 'fileSizeBytes', 'fileChunkCount', 'isPublic', 'updatedAt']);
       allow delete: if isValidId(questionId) && isVerified() && existing().authorId == request.auth.uid;
 
       match /comments/{commentId} {
@@ -373,6 +399,20 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/pastQuestions/$(questionId));
         allow update: if false;
         allow delete: if isValidId(questionId) && isValidId(commentId) && isVerified() && existing().authorId == request.auth.uid;
+      }
+
+      match /fileChunks/{chunkId} {
+        allow get: if isValidId(questionId) && isValidId(chunkId) && isSignedIn()
+          && (get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.isPublic == true
+              || get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.authorId == request.auth.uid);
+        allow list: if isSignedIn() && (resource.data.isReadablePublicly == true || resource.data.authorId == request.auth.uid);
+        allow create: if isValidId(questionId) && isValidId(chunkId) && isVerified()
+          && isValidFileChunk(incoming())
+          && incoming().authorId == request.auth.uid
+          && get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.authorId == request.auth.uid
+          && incoming().isReadablePublicly == get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.isPublic;
+        allow update: if false;
+        allow delete: if isValidId(questionId) && isValidId(chunkId) && isVerified() && existing().authorId == request.auth.uid;
       }
     }
 
@@ -393,9 +433,23 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           incoming().diff(existing()).affectedKeys().hasOnly(['aiSummary', 'updatedAt'])
-          || incoming().diff(existing()).affectedKeys().hasOnly(['courseCode', 'courseTitle', 'materialType', 'title', 'description', 'contentText', 'aiSummary', 'fileName', 'fileMimeType', 'fileDataUrl', 'externalUrl', 'visibility', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['courseCode', 'courseTitle', 'materialType', 'title', 'description', 'contentText', 'aiSummary', 'fileName', 'fileMimeType', 'fileDataUrl', 'fileSizeBytes', 'fileChunkCount', 'externalUrl', 'visibility', 'updatedAt'])
         );
       allow delete: if isValidId(materialId) && isVerified() && existing().authorId == request.auth.uid;
+
+      match /fileChunks/{chunkId} {
+        allow get: if isValidId(materialId) && isValidId(chunkId) && isSignedIn()
+          && (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']
+              || get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid);
+        allow list: if isSignedIn() && (resource.data.isReadablePublicly == true || resource.data.authorId == request.auth.uid);
+        allow create: if isValidId(materialId) && isValidId(chunkId) && isVerified()
+          && isValidFileChunk(incoming())
+          && incoming().authorId == request.auth.uid
+          && get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid
+          && incoming().isReadablePublicly == (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']);
+        allow update: if false;
+        allow delete: if isValidId(materialId) && isValidId(chunkId) && isVerified() && existing().authorId == request.auth.uid;
+      }
     }
 
     // 5. Peer-to-Peer Student Conversations

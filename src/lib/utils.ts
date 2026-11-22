@@ -66,50 +66,64 @@ export function getInitials(name: string): string {
 export interface ParsedUploadResult {
   fileName: string;
   fileMimeType: string;
+  fileSizeBytes: number;
   extractedText?: string;
   fileDataUrl?: string;
 }
 
-const MAX_BINARY_DATA_URL_CHARS = 680000;
+export const MAX_FILE_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+export const MAX_INLINE_DATA_URL_CHARS = 650000;
+
+export function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read selected file.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export async function readStudyFile(file: File): Promise<ParsedUploadResult> {
   const name = file.name.slice(0, 180);
   const mime = (file.type || 'application/octet-stream').slice(0, 100);
+
+  if (file.size > MAX_FILE_UPLOAD_BYTES) {
+    throw new Error(
+      `File exceeds the 100 MB limit (${formatFileSize(file.size)} selected). Choose a file up to 100 MB.`
+    );
+  }
 
   const isTextLike =
     mime.startsWith('text/') ||
     /\.(txt|md|markdown|csv|json|py|ts|tsx|js|java|c|cpp|sql|tex)$/i.test(file.name);
 
   if (isTextLike) {
-    const text = await file.text();
+    const previewSlice = file.size > 200000 ? file.slice(0, 200000) : file;
+    const text = await previewSlice.text();
+    const extractedText = text.slice(0, 50000);
+    // Keep full Data URL for download/AI when text exceeds the inline preview cap
+    const fileDataUrl = file.size > 50000 ? await readAsDataUrl(file) : undefined;
     return {
       fileName: name,
       fileMimeType: mime || 'text/plain',
-      extractedText: text.slice(0, 50000),
+      fileSizeBytes: file.size,
+      extractedText,
+      fileDataUrl,
     };
   }
 
-  // Binary PDF or image: convert to base64 Data URL within Firestore 1MB safety budget
-  if (file.size > 480 * 1024) {
-    throw new Error(
-      'Binary files (PDF/images) must be under 480 KB for direct storage, or paste extracted text / add a cloud link.'
-    );
-  }
-
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Failed to read selected file.'));
-    reader.readAsDataURL(file);
-  });
-
-  if (dataUrl.length > MAX_BINARY_DATA_URL_CHARS) {
-    throw new Error('Encoded file exceeds the 680 KB document storage budget. Try a smaller file or paste text.');
-  }
-
+  const dataUrl = await readAsDataUrl(file);
   return {
     fileName: name,
     fileMimeType: mime,
+    fileSizeBytes: file.size,
     fileDataUrl: dataUrl,
   };
 }

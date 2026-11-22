@@ -5,8 +5,10 @@ import { MarkdownView } from '../components/MarkdownView';
 import { ShareToPeerModal } from '../components/ShareToPeerModal';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { clampString, formatTimestamp, getTimestampMillis, normalizeCourseCode, readStudyFile } from '../lib/utils';
-import type { ExamTypeOption, PastQuestion, PastQuestionComment, SemesterOption } from '../types';
+import { deleteFileChunks, loadAttachmentDataUrl, splitDataUrlIntoChunks, uploadFileChunks } from '../lib/fileChunks';
+import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
+import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, readStudyFile } from '../lib/utils';
+import type { ExamTypeOption, PastQuestion, PastQuestionComment, QuizAttempt, SemesterOption } from '../types';
 
 export interface StudioPrefill {
   title: string;
@@ -14,7 +16,10 @@ export interface StudioPrefill {
   contentText: string;
   fileDataUrl?: string;
   fileMimeType?: string;
+  fileName?: string;
+  fileSizeBytes?: number;
   initialMode: 'summary' | 'quiz' | 'flashcards';
+  savedQuiz?: QuizAttempt;
 }
 
 interface PastQuestionsPageProps {
@@ -52,11 +57,15 @@ export function PastQuestionsPage({
   const [fileName, setFileName] = useState('');
   const [fileMimeType, setFileMimeType] = useState('');
   const [fileDataUrl, setFileDataUrl] = useState('');
+  const [fileSizeBytes, setFileSizeBytes] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Active Paper Reader & Discussion State
   const [selected, setSelected] = useState<PastQuestion | null>(null);
+  const [loadedFileDataUrl, setLoadedFileDataUrl] = useState('');
+  const [loadingAttachment, setLoadingAttachment] = useState(false);
   const [showSolution, setShowSolution] = useState(false);
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [explaining, setExplaining] = useState(false);
@@ -107,8 +116,36 @@ export function PastQuestionsPage({
   useEffect(() => {
     if (!selected) {
       setComments([]);
+      setLoadedFileDataUrl('');
+      setLoadingAttachment(false);
       return;
     }
+
+    let cancelled = false;
+    if (selected.fileDataUrl) {
+      setLoadedFileDataUrl(selected.fileDataUrl);
+      setLoadingAttachment(false);
+    } else if (selected.fileChunkCount && selected.fileChunkCount > 0) {
+      setLoadedFileDataUrl('');
+      setLoadingAttachment(true);
+      void loadAttachmentDataUrl('pastQuestions', selected.id, {
+        inlineDataUrl: selected.fileDataUrl,
+        chunkCount: selected.fileChunkCount,
+        isPubliclyReadable: selected.isPublic,
+        currentUserId: user?.uid,
+        authorId: selected.authorId,
+      })
+        .then((url) => {
+          if (!cancelled) setLoadedFileDataUrl(url);
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingAttachment(false);
+        });
+    } else {
+      setLoadedFileDataUrl('');
+      setLoadingAttachment(false);
+    }
+
     const q = query(
       collection(db, 'pastQuestions', selected.id, 'comments'),
       orderBy('createdAt', 'asc')
@@ -120,8 +157,11 @@ export function PastQuestionsPage({
       },
       (err) => handleFirestoreError(err, OperationType.LIST, `pastQuestions/${selected.id}/comments`)
     );
-    return () => unsub();
-  }, [selected]);
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [selected, user?.uid]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -131,9 +171,10 @@ export function PastQuestionsPage({
       const parsed = await readStudyFile(file);
       setFileName(parsed.fileName);
       setFileMimeType(parsed.fileMimeType);
+      setFileSizeBytes(parsed.fileSizeBytes);
       if (parsed.extractedText) {
         setQuestionText((prev) => (prev ? `${prev}\n\n${parsed.extractedText}` : parsed.extractedText!));
-        setFileDataUrl('');
+        setFileDataUrl(parsed.fileDataUrl || '');
       } else if (parsed.fileDataUrl) {
         setFileDataUrl(parsed.fileDataUrl);
       }
@@ -157,7 +198,11 @@ export function PastQuestionsPage({
 
     setSubmitting(true);
     setUploadError(null);
+    setUploadProgress(null);
     try {
+      const needsChunking = Boolean(fileDataUrl && fileDataUrl.length > MAX_INLINE_DATA_URL_CHARS);
+      const plannedChunkCount = needsChunking ? splitDataUrlIntoChunks(fileDataUrl).length : 0;
+
       const payload: Record<string, unknown> = {
         authorId: user.uid,
         authorName: clampString(profile?.displayName || user.displayName || 'Student', 120),
@@ -176,9 +221,20 @@ export function PastQuestionsPage({
       if (solutionText.trim()) payload.solutionText = clampString(solutionText, 50000);
       if (fileName) payload.fileName = clampString(fileName, 180);
       if (fileMimeType) payload.fileMimeType = clampString(fileMimeType, 100);
-      if (fileDataUrl) payload.fileDataUrl = fileDataUrl;
+      if (fileSizeBytes > 0) payload.fileSizeBytes = fileSizeBytes;
+      if (needsChunking) {
+        payload.fileChunkCount = plannedChunkCount;
+      } else if (fileDataUrl) {
+        payload.fileDataUrl = fileDataUrl;
+      }
 
-      await addDoc(collection(db, 'pastQuestions'), payload);
+      const docRef = await addDoc(collection(db, 'pastQuestions'), payload);
+
+      if (needsChunking && fileDataUrl) {
+        await uploadFileChunks('pastQuestions', docRef.id, fileDataUrl, user.uid, true, (done, total) => {
+          setUploadProgress(`Uploading attachment (${done}/${total})...`);
+        });
+      }
 
       setShowUpload(false);
       setCourseCode('');
@@ -189,6 +245,8 @@ export function PastQuestionsPage({
       setFileName('');
       setFileMimeType('');
       setFileDataUrl('');
+      setFileSizeBytes(0);
+      setUploadProgress(null);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Failed to save past question.');
       handleFirestoreError(err, OperationType.CREATE, 'pastQuestions');
@@ -201,6 +259,15 @@ export function PastQuestionsPage({
     setExplaining(true);
     setExplainError(null);
     try {
+      const attachmentUrl =
+        loadedFileDataUrl ||
+        (await loadAttachmentDataUrl('pastQuestions', pq.id, {
+          inlineDataUrl: pq.fileDataUrl,
+          chunkCount: pq.fileChunkCount,
+          isPubliclyReadable: pq.isPublic,
+          currentUserId: user?.uid,
+          authorId: pq.authorId,
+        }));
       const res = await fetch('/api/ai/explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -208,8 +275,9 @@ export function PastQuestionsPage({
           courseCode: pq.courseCode,
           title: pq.title,
           questionText: pq.questionText,
-          fileDataUrl: pq.fileDataUrl,
+          fileDataUrl: attachmentUrl || undefined,
           fileMimeType: pq.fileMimeType,
+          fileName: pq.fileName,
         }),
       });
       const data = await res.json();
@@ -244,6 +312,7 @@ export function PastQuestionsPage({
   const handleDelete = async (pq: PastQuestion) => {
     if (!user || pq.authorId !== user.uid) return;
     try {
+      await deleteFileChunks('pastQuestions', pq.id, user.uid, pq.fileChunkCount);
       await deleteDoc(doc(db, 'pastQuestions', pq.id));
       if (selected?.id === pq.id) setSelected(null);
     } catch (err) {
@@ -568,22 +637,23 @@ export function PastQuestionsPage({
               </div>
 
               <div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                    Attach Paper File (.txt, .md, .pdf, image under 480 KB)
+                    Attach Paper File (.pdf, .ppt/.pptx, .doc/.docx, .txt, .md, image up to 100 MB)
                   </label>
                   {fileName && (
                     <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
                       Attached: {fileName}
+                      {fileSizeBytes > 0 ? ` (${formatFileSize(fileSizeBytes)})` : ''}
                     </span>
                   )}
                 </div>
                 <label className="mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800">
                   <Upload className="h-4 w-4" />
-                  <span>Choose PDF, image, or text file</span>
+                  <span>Choose PDF, slides, doc, image, or text file (max 100 MB)</span>
                   <input
                     type="file"
-                    accept=".txt,.md,.pdf,image/png,image/jpeg,image/webp"
+                    accept=".txt,.md,.markdown,.csv,.json,.tex,.pdf,.ppt,.pptx,.doc,.docx,image/png,image/jpeg,image/webp,image/gif"
                     onChange={handleFileChange}
                     className="hidden"
                   />
@@ -616,6 +686,10 @@ export function PastQuestionsPage({
                 />
               </div>
 
+              {uploadProgress && (
+                <p className="text-xs font-medium text-blue-700 dark:text-blue-400">{uploadProgress}</p>
+              )}
+
               {uploadError && (
                 <p className="text-xs font-medium text-red-600 dark:text-red-400">{uploadError}</p>
               )}
@@ -633,7 +707,7 @@ export function PastQuestionsPage({
                   disabled={submitting}
                   className="rounded-lg bg-blue-700 px-5 py-2 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
                 >
-                  {submitting ? 'Publishing...' : 'Publish Past Question'}
+                  {submitting ? uploadProgress || 'Publishing...' : 'Publish Past Question'}
                 </button>
               </div>
             </form>
@@ -695,12 +769,15 @@ export function PastQuestionsPage({
                     title: selected.title,
                     courseCode: selected.courseCode,
                     contentText: selected.questionText,
-                    fileDataUrl: selected.fileDataUrl,
+                    fileDataUrl: loadedFileDataUrl || selected.fileDataUrl,
                     fileMimeType: selected.fileMimeType,
+                    fileName: selected.fileName,
+                    fileSizeBytes: selected.fileSizeBytes,
                     initialMode: 'quiz',
                   })
                 }
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                disabled={loadingAttachment}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
               >
                 Generate Practice Quiz
               </button>
@@ -714,14 +791,14 @@ export function PastQuestionsPage({
                 Share with Peer
               </button>
 
-              {selected.fileDataUrl && (
+              {loadedFileDataUrl && (
                 <a
-                  href={selected.fileDataUrl}
+                  href={loadedFileDataUrl}
                   download={selected.fileName || `${selected.courseCode}_past_paper`}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                 >
                   <Download className="h-3.5 w-3.5" />
-                  Download Attachment
+                  Download Attachment{selected.fileSizeBytes ? ` (${formatFileSize(selected.fileSizeBytes)})` : ''}
                 </a>
               )}
 
@@ -768,18 +845,24 @@ export function PastQuestionsPage({
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950">
               <MarkdownView content={selected.questionText} />
 
-              {selected.fileDataUrl && selected.fileMimeType?.startsWith('image/') && (
+              {loadingAttachment && (
+                <p className="mt-4 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  Loading attachment ({selected.fileName || 'file'})...
+                </p>
+              )}
+
+              {loadedFileDataUrl && selected.fileMimeType?.startsWith('image/') && (
                 <img
-                  src={selected.fileDataUrl}
+                  src={loadedFileDataUrl}
                   alt={selected.fileName || 'Past exam attachment'}
                   referrerPolicy="no-referrer"
                   className="mt-4 max-h-96 rounded-lg border border-slate-200 object-contain dark:border-slate-800"
                 />
               )}
 
-              {selected.fileDataUrl && selected.fileMimeType === 'application/pdf' && (
+              {loadedFileDataUrl && selected.fileMimeType === 'application/pdf' && (
                 <iframe
-                  src={selected.fileDataUrl}
+                  src={loadedFileDataUrl}
                   title={selected.fileName || 'Past exam PDF'}
                   className="mt-4 h-96 w-full rounded-lg border border-slate-200 dark:border-slate-800"
                 />
@@ -810,9 +893,43 @@ export function PastQuestionsPage({
             )}
             {aiExplanation && (
               <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50/50 p-5 dark:border-blue-900/50 dark:bg-blue-950/20">
-                <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  AI Step-by-Step Solution Guide
-                </h3>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    AI Step-by-Step Solution Guide
+                  </h3>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadNotesAsHtml({
+                          title: selected.title,
+                          courseCode: selected.courseCode,
+                          subtitle: `AI Worked Solution (${selected.examType} · ${selected.semester} ${selected.examYear})`,
+                          markdownContent: aiExplanation,
+                        })
+                      }
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    >
+                      <Download className="h-3 w-3" />
+                      Download HTML
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadNotesAsMarkdown({
+                          title: selected.title,
+                          courseCode: selected.courseCode,
+                          subtitle: `AI Worked Solution (${selected.examType} · ${selected.semester} ${selected.examYear})`,
+                          markdownContent: aiExplanation,
+                        })
+                      }
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    >
+                      <Download className="h-3 w-3" />
+                      .MD
+                    </button>
+                  </div>
+                </div>
                 <div className="mt-2">
                   <MarkdownView content={aiExplanation} />
                 </div>

@@ -68,6 +68,8 @@ export interface PastQuestion {
   fileName?: string;
   fileMimeType?: string;
   fileDataUrl?: string;
+  fileSizeBytes?: number;
+  fileChunkCount?: number;
   isPublic: boolean;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -98,6 +100,8 @@ export interface StudyMaterial {
   fileName?: string;
   fileMimeType?: string;
   fileDataUrl?: string;
+  fileSizeBytes?: number;
+  fileChunkCount?: number;
   externalUrl?: string;
   visibility: MaterialVisibility;
   createdAt?: unknown;
@@ -153,9 +157,14 @@ export interface QuizAttempt {
   ownerId: string;
   title: string;
   courseCode?: string;
+  difficulty?: string;
   score: number;
   totalQuestions: number;
+  isGraded?: boolean;
+  questions?: GeneratedQuizQuestion[];
+  selectedAnswers?: number[];
   createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 export interface Conversation {

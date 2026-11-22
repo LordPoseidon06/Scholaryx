@@ -5,7 +5,9 @@ import { MarkdownView } from '../components/MarkdownView';
 import { ShareToPeerModal } from '../components/ShareToPeerModal';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { clampString, formatTimestamp, getTimestampMillis, normalizeCourseCode, readStudyFile } from '../lib/utils';
+import { deleteFileChunks, loadAttachmentDataUrl, splitDataUrlIntoChunks, uploadFileChunks } from '../lib/fileChunks';
+import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
+import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, readStudyFile } from '../lib/utils';
 import type { MaterialTypeOption, MaterialVisibility, StudyMaterial } from '../types';
 import type { StudioPrefill } from './PastQuestionsPage';
 
@@ -44,11 +46,15 @@ export function StudyMaterialsPage({
   const [fileName, setFileName] = useState('');
   const [fileMimeType, setFileMimeType] = useState('');
   const [fileDataUrl, setFileDataUrl] = useState('');
+  const [fileSizeBytes, setFileSizeBytes] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Reader modal state
   const [selected, setSelected] = useState<StudyMaterial | null>(null);
+  const [loadedFileDataUrl, setLoadedFileDataUrl] = useState('');
+  const [loadingAttachment, setLoadingAttachment] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [previewSummary, setPreviewSummary] = useState<string | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -97,6 +103,41 @@ export function StudyMaterialsPage({
     };
   }, [user]);
 
+  useEffect(() => {
+    if (!selected) {
+      setLoadedFileDataUrl('');
+      setLoadingAttachment(false);
+      return;
+    }
+    let cancelled = false;
+    if (selected.fileDataUrl) {
+      setLoadedFileDataUrl(selected.fileDataUrl);
+      setLoadingAttachment(false);
+    } else if (selected.fileChunkCount && selected.fileChunkCount > 0) {
+      setLoadedFileDataUrl('');
+      setLoadingAttachment(true);
+      void loadAttachmentDataUrl('studyMaterials', selected.id, {
+        inlineDataUrl: selected.fileDataUrl,
+        chunkCount: selected.fileChunkCount,
+        isPubliclyReadable: selected.visibility !== 'private',
+        currentUserId: user?.uid,
+        authorId: selected.authorId,
+      })
+        .then((url) => {
+          if (!cancelled) setLoadedFileDataUrl(url);
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingAttachment(false);
+        });
+    } else {
+      setLoadedFileDataUrl('');
+      setLoadingAttachment(false);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, user?.uid]);
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -105,9 +146,10 @@ export function StudyMaterialsPage({
       const parsed = await readStudyFile(file);
       setFileName(parsed.fileName);
       setFileMimeType(parsed.fileMimeType);
+      setFileSizeBytes(parsed.fileSizeBytes);
       if (parsed.extractedText) {
         setContentText((prev) => (prev ? `${prev}\n\n${parsed.extractedText}` : parsed.extractedText!));
-        setFileDataUrl('');
+        setFileDataUrl(parsed.fileDataUrl || '');
       } else if (parsed.fileDataUrl) {
         setFileDataUrl(parsed.fileDataUrl);
       }
@@ -131,7 +173,11 @@ export function StudyMaterialsPage({
 
     setSubmitting(true);
     setUploadError(null);
+    setUploadProgress(null);
     try {
+      const needsChunking = Boolean(fileDataUrl && fileDataUrl.length > MAX_INLINE_DATA_URL_CHARS);
+      const plannedChunkCount = needsChunking ? splitDataUrlIntoChunks(fileDataUrl).length : 0;
+
       const payload: Record<string, unknown> = {
         authorId: user.uid,
         authorName: clampString(profile?.displayName || user.displayName || 'Student', 120),
@@ -147,10 +193,28 @@ export function StudyMaterialsPage({
       if (description.trim()) payload.description = clampString(description, 1000);
       if (fileName) payload.fileName = clampString(fileName, 180);
       if (fileMimeType) payload.fileMimeType = clampString(fileMimeType, 100);
-      if (fileDataUrl) payload.fileDataUrl = fileDataUrl;
+      if (fileSizeBytes > 0) payload.fileSizeBytes = fileSizeBytes;
+      if (needsChunking) {
+        payload.fileChunkCount = plannedChunkCount;
+      } else if (fileDataUrl) {
+        payload.fileDataUrl = fileDataUrl;
+      }
       if (externalUrl.trim()) payload.externalUrl = clampString(externalUrl, 500);
 
-      await addDoc(collection(db, 'studyMaterials'), payload);
+      const docRef = await addDoc(collection(db, 'studyMaterials'), payload);
+
+      if (needsChunking && fileDataUrl) {
+        await uploadFileChunks(
+          'studyMaterials',
+          docRef.id,
+          fileDataUrl,
+          user.uid,
+          visibility !== 'private',
+          (done, total) => {
+            setUploadProgress(`Uploading attachment (${done}/${total})...`);
+          }
+        );
+      }
 
       setShowUpload(false);
       setCourseCode('');
@@ -162,6 +226,8 @@ export function StudyMaterialsPage({
       setFileName('');
       setFileMimeType('');
       setFileDataUrl('');
+      setFileSizeBytes(0);
+      setUploadProgress(null);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Failed to upload study material.');
       handleFirestoreError(err, OperationType.CREATE, 'studyMaterials');
@@ -174,6 +240,15 @@ export function StudyMaterialsPage({
     setSummarizing(true);
     setSummaryError(null);
     try {
+      const attachmentUrl =
+        loadedFileDataUrl ||
+        (await loadAttachmentDataUrl('studyMaterials', mat.id, {
+          inlineDataUrl: mat.fileDataUrl,
+          chunkCount: mat.fileChunkCount,
+          isPubliclyReadable: mat.visibility !== 'private',
+          currentUserId: user?.uid,
+          authorId: mat.authorId,
+        }));
       const res = await fetch('/api/ai/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -181,8 +256,9 @@ export function StudyMaterialsPage({
           title: mat.title,
           courseCode: mat.courseCode,
           contentText: mat.contentText,
-          fileDataUrl: mat.fileDataUrl,
+          fileDataUrl: attachmentUrl || undefined,
           fileMimeType: mat.fileMimeType,
+          fileName: mat.fileName,
           focusMode: 'standard',
         }),
       });
@@ -208,6 +284,7 @@ export function StudyMaterialsPage({
   const handleDelete = async (mat: StudyMaterial) => {
     if (!user || mat.authorId !== user.uid) return;
     try {
+      await deleteFileChunks('studyMaterials', mat.id, user.uid, mat.fileChunkCount);
       await deleteDoc(doc(db, 'studyMaterials', mat.id));
       if (selected?.id === mat.id) setSelected(null);
     } catch (err) {
@@ -539,22 +616,23 @@ export function StudyMaterialsPage({
               </div>
 
               <div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                    Upload Notes/Slides File (.txt, .md, .pdf, image under 480 KB)
+                    Upload Notes/Slides File (.pdf, .ppt/.pptx, .doc/.docx, .txt, .md, image up to 100 MB)
                   </label>
                   {fileName && (
                     <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
                       Attached: {fileName}
+                      {fileSizeBytes > 0 ? ` (${formatFileSize(fileSizeBytes)})` : ''}
                     </span>
                   )}
                 </div>
                 <label className="mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800">
                   <Upload className="h-4 w-4" />
-                  <span>Select file to attach or import text</span>
+                  <span>Select file to attach or import text (max 100 MB)</span>
                   <input
                     type="file"
-                    accept=".txt,.md,.pdf,image/png,image/jpeg,image/webp"
+                    accept=".txt,.md,.markdown,.csv,.json,.tex,.pdf,.ppt,.pptx,.doc,.docx,image/png,image/jpeg,image/webp,image/gif"
                     onChange={handleFileChange}
                     className="hidden"
                   />
@@ -588,6 +666,10 @@ export function StudyMaterialsPage({
                 />
               </div>
 
+              {uploadProgress && (
+                <p className="text-xs font-medium text-blue-700 dark:text-blue-400">{uploadProgress}</p>
+              )}
+
               {uploadError && (
                 <p className="text-xs font-medium text-red-600 dark:text-red-400">{uploadError}</p>
               )}
@@ -605,7 +687,7 @@ export function StudyMaterialsPage({
                   disabled={submitting}
                   className="rounded-lg bg-blue-700 px-5 py-2 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
                 >
-                  {submitting ? 'Saving...' : 'Publish Material'}
+                  {submitting ? uploadProgress || 'Saving...' : 'Publish Material'}
                 </button>
               </div>
             </form>
@@ -662,12 +744,15 @@ export function StudyMaterialsPage({
                     title: selected.title,
                     courseCode: selected.courseCode,
                     contentText: selected.contentText,
-                    fileDataUrl: selected.fileDataUrl,
+                    fileDataUrl: loadedFileDataUrl || selected.fileDataUrl,
                     fileMimeType: selected.fileMimeType,
+                    fileName: selected.fileName,
+                    fileSizeBytes: selected.fileSizeBytes,
                     initialMode: 'quiz',
                   })
                 }
-                className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                disabled={loadingAttachment}
+                className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
               >
                 Generate Retention Quiz
               </button>
@@ -679,12 +764,15 @@ export function StudyMaterialsPage({
                     title: selected.title,
                     courseCode: selected.courseCode,
                     contentText: selected.contentText,
-                    fileDataUrl: selected.fileDataUrl,
+                    fileDataUrl: loadedFileDataUrl || selected.fileDataUrl,
                     fileMimeType: selected.fileMimeType,
+                    fileName: selected.fileName,
+                    fileSizeBytes: selected.fileSizeBytes,
                     initialMode: 'flashcards',
                   })
                 }
-                className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                disabled={loadingAttachment}
+                className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
               >
                 Create Flashcards
               </button>
@@ -698,14 +786,14 @@ export function StudyMaterialsPage({
                 Share
               </button>
 
-              {selected.fileDataUrl && (
+              {loadedFileDataUrl && (
                 <a
-                  href={selected.fileDataUrl}
+                  href={loadedFileDataUrl}
                   download={selected.fileName || `${selected.courseCode}_material`}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                 >
                   <Download className="h-3.5 w-3.5" />
-                  Download
+                  Download{selected.fileSizeBytes ? ` (${formatFileSize(selected.fileSizeBytes)})` : ''}
                 </a>
               )}
 
@@ -766,9 +854,43 @@ export function StudyMaterialsPage({
 
             {previewSummary && (
               <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50/50 p-5 dark:border-blue-900/50 dark:bg-blue-950/20">
-                <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  AI Study Summary
-                </h3>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    AI Study Summary
+                  </h3>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadNotesAsHtml({
+                          title: selected.title,
+                          courseCode: selected.courseCode,
+                          subtitle: 'AI Study Summary',
+                          markdownContent: previewSummary,
+                        })
+                      }
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    >
+                      <Download className="h-3 w-3" />
+                      Download HTML
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadNotesAsMarkdown({
+                          title: selected.title,
+                          courseCode: selected.courseCode,
+                          subtitle: 'AI Study Summary',
+                          markdownContent: previewSummary,
+                        })
+                      }
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    >
+                      <Download className="h-3 w-3" />
+                      .MD
+                    </button>
+                  </div>
+                </div>
                 <div className="mt-2">
                   <MarkdownView content={previewSummary} />
                 </div>
@@ -778,18 +900,24 @@ export function StudyMaterialsPage({
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950">
               <MarkdownView content={selected.contentText} />
 
-              {selected.fileDataUrl && selected.fileMimeType?.startsWith('image/') && (
+              {loadingAttachment && (
+                <p className="mt-4 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  Loading attachment ({selected.fileName || 'file'})...
+                </p>
+              )}
+
+              {loadedFileDataUrl && selected.fileMimeType?.startsWith('image/') && (
                 <img
-                  src={selected.fileDataUrl}
+                  src={loadedFileDataUrl}
                   alt={selected.fileName || 'Study slide attachment'}
                   referrerPolicy="no-referrer"
                   className="mt-4 max-h-96 rounded-lg border border-slate-200 object-contain dark:border-slate-800"
                 />
               )}
 
-              {selected.fileDataUrl && selected.fileMimeType === 'application/pdf' && (
+              {loadedFileDataUrl && selected.fileMimeType === 'application/pdf' && (
                 <iframe
-                  src={selected.fileDataUrl}
+                  src={loadedFileDataUrl}
                   title={selected.fileName || 'Study material PDF'}
                   className="mt-4 h-96 w-full rounded-lg border border-slate-200 dark:border-slate-800"
                 />

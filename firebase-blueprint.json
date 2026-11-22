@@ -215,6 +215,12 @@
           "type": "string",
           "maxLength": 700000
         },
+        "fileSizeBytes": {
+          "type": "integer"
+        },
+        "fileChunkCount": {
+          "type": "integer"
+        },
         "isPublic": {
           "type": "boolean"
         },
@@ -315,6 +321,12 @@
         "fileDataUrl": {
           "type": "string",
           "maxLength": 700000
+        },
+        "fileSizeBytes": {
+          "type": "integer"
+        },
+        "fileChunkCount": {
+          "type": "integer"
         },
         "externalUrl": {
           "type": "string",
@@ -479,7 +491,7 @@
     },
     "QuizAttempt": {
       "title": "QuizAttempt",
-      "description": "Saved AI quiz score for retention tracking.",
+      "description": "Saved AI quiz for score tracking, downloadable export, and later interactive review.",
       "type": "object",
       "properties": {
         "ownerId": {
@@ -497,13 +509,32 @@
           "type": "string",
           "maxLength": 24
         },
+        "difficulty": {
+          "type": "string",
+          "maxLength": 40
+        },
         "score": {
           "type": "integer"
         },
         "totalQuestions": {
           "type": "integer"
         },
+        "isGraded": {
+          "type": "boolean"
+        },
+        "questions": {
+          "type": "array",
+          "description": "Up to 50 saved multiple-choice quiz questions with options, correctIndex, and explanation."
+        },
+        "selectedAnswers": {
+          "type": "array",
+          "description": "Per-question selected option index (-1 if unanswered), up to 50 entries."
+        },
         "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
           "type": "string",
           "format": "date-time"
         }
@@ -584,6 +615,31 @@
         }
       },
       "required": ["senderId", "senderName", "participantIds", "text", "createdAt"]
+    },
+    "FileChunk": {
+      "title": "FileChunk",
+      "description": "Chunked base64 Data URL segment for large uploaded study materials and past papers.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "chunkIndex": {
+          "type": "integer"
+        },
+        "data": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 650000
+        },
+        "isReadablePublicly": {
+          "type": "boolean"
+        }
+      },
+      "required": ["authorId", "chunkIndex", "data", "isReadablePublicly"]
     }
   },
   "firestore": {
@@ -607,9 +663,17 @@
       "schema": { "$ref": "#/entities/PastQuestionComment" },
       "description": "Course peer discussion comments on a past question."
     },
+    "/pastQuestions/{questionId}/fileChunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/FileChunk" },
+      "description": "Chunked attachment data for large past exam papers."
+    },
     "/studyMaterials/{materialId}": {
       "schema": { "$ref": "#/entities/StudyMaterial" },
       "description": "Shared notes, slides, and study materials."
+    },
+    "/studyMaterials/{materialId}/fileChunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/FileChunk" },
+      "description": "Chunked attachment data for large study materials and slide decks."
     },
     "/users/{userId}/tasks/{taskId}": {
       "schema": { "$ref": "#/entities/StudyTask" },

@@ -202,7 +202,19 @@ function WorkspaceShell() {
       case 'tasks':
         return <TasksPage />;
       case 'progress':
-        return <ProgressPage />;
+        return (
+          <ProgressPage
+            onReviewQuiz={(attempt) =>
+              handleSendToAIStudio({
+                title: attempt.title,
+                courseCode: attempt.courseCode || '',
+                contentText: '',
+                initialMode: 'quiz',
+                savedQuiz: attempt,
+              })
+            }
+          />
+        );
       case 'peers':
         return (
           <PeersChatPage
