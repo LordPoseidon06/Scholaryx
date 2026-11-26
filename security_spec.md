@@ -8,6 +8,7 @@
 5. **Temporal Integrity & Anti-Update-Gap**: All `create` operations require `createdAt == request.time` (and `updatedAt == request.time` where applicable). Updates enforce `createdAt == existing().createdAt`, immutable `ownerId`/`authorId`/`uid`, strict `affectedKeys().hasOnly(...)` action sets, and `isValid[Entity](incoming())` schema/length checks.
 
 6. **Chunked Attachment Integrity**: Large file attachments stored in `/pastQuestions/{questionId}/fileChunks/{chunkId}` and `/studyMaterials/{materialId}/fileChunks/{chunkId}` verify parent authorship via `get()` on create, bind `isReadablePublicly` strictly to parent visibility, cap chunk payload at 650,000 chars and `chunkIndex <= 250` (supporting up to 100 MB attachments), and enforce query-level filtering on `allow list` without `get()`.
+7. **PDF Annotations Isolation**: Personal highlights and sticky notes stored under `/studyMaterials/{materialId}/annotations/{annotationId}` validate parent readability on `create`/`get`, restrict `list` via `resource.data.authorId == request.auth.uid`, bound `rects` arrays (`<= 80`) and text lengths (`<= 2000`), and limit `update`/`delete` strictly to the annotation author.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads
 1. **PII Snooping (`GET /users/victim_uid`)**: Signed-in non-owner tries to read another student's `/users/{uid}` document -> `PERMISSION_DENIED`.

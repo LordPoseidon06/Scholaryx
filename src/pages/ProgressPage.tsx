@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Award, BookOpen, CheckCircle2, Clock, Download, Eye, Plus, RotateCw, Trash2, TrendingUp, X, XCircle } from 'lucide-react';
+import { motion } from 'motion/react';
+import { EASE_OUT_EXPO, ModalShell } from '../components/MotionPrimitives';
+import { QuizPerformanceChart } from '../components/QuizPerformanceChart';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { downloadQuizAsHtml, downloadQuizAsMarkdown } from '../lib/quizExport';
-import { clampString, formatTimestamp, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
+import { clampString, formatTimestamp, getTimestampMillis, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
 import type { Enrollment, QuizAttempt, StudyLog } from '../types';
 
 interface ProgressPageProps {
@@ -46,20 +49,35 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
   useEffect(() => {
     if (!user) return;
     const unsubEnroll = onSnapshot(
-      query(collection(db, 'users', user.uid, 'enrollments'), orderBy('createdAt', 'desc')),
-      (snap) => setEnrollments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Enrollment))),
+      query(collection(db, 'users', user.uid, 'enrollments'), where('ownerId', '==', user.uid)),
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as Enrollment))
+          .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
+        setEnrollments(docs);
+      },
       (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/enrollments`)
     );
 
     const unsubLogs = onSnapshot(
-      query(collection(db, 'users', user.uid, 'studyLogs'), orderBy('createdAt', 'desc')),
-      (snap) => setStudyLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() } as StudyLog))),
+      query(collection(db, 'users', user.uid, 'studyLogs'), where('ownerId', '==', user.uid)),
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as StudyLog))
+          .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
+        setStudyLogs(docs);
+      },
       (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/studyLogs`)
     );
 
     const unsubQuizzes = onSnapshot(
-      query(collection(db, 'users', user.uid, 'quizAttempts'), orderBy('createdAt', 'desc')),
-      (snap) => setQuizAttempts(snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuizAttempt))),
+      query(collection(db, 'users', user.uid, 'quizAttempts'), where('ownerId', '==', user.uid)),
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as QuizAttempt))
+          .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
+        setQuizAttempts(docs);
+      },
       (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/quizAttempts`)
     );
 
@@ -218,7 +236,7 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
 
       {/* Summary KPI Row */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Weighted Course Average</p>
           <p className="mt-2 font-mono text-3xl font-semibold text-slate-900 tabular-nums dark:text-slate-100">
             {enrollments.length > 0 ? `${weightedAverage.toFixed(1)}%` : '—'}
@@ -228,7 +246,7 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
           </p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Logged Study Time</p>
           <p className="mt-2 font-mono text-3xl font-semibold text-slate-900 tabular-nums dark:text-slate-100">
             {(totalMinutesLogged / 60).toFixed(1)}h
@@ -238,7 +256,7 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
           </p>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">AI Quiz Retention Avg</p>
           <p className="mt-2 font-mono text-3xl font-semibold text-slate-900 tabular-nums dark:text-slate-100">
             {gradedQuizzes.length > 0 ? `${avgQuizScore}%` : '—'}
@@ -248,6 +266,16 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
           </p>
         </div>
       </div>
+
+      {/* D3.js Quiz Performance Trends */}
+      <QuizPerformanceChart
+        quizAttempts={quizAttempts}
+        onReviewQuiz={(attempt) => {
+          if (attempt.questions && attempt.questions.length > 0) {
+            setReviewingQuiz(attempt);
+          }
+        }}
+      />
 
       {/* Course Progress Grid */}
       <div className="space-y-4">
@@ -279,7 +307,7 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
               return (
                 <div
                   key={en.id}
-                  className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900"
+                  className="rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -321,9 +349,11 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
                       </span>
                     </div>
                     <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                      <div
-                        className="h-full rounded-full bg-blue-700 transition-all"
-                        style={{ width: `${pct}%` }}
+                      <motion.div
+                        className="h-full rounded-full bg-blue-700 dark:bg-blue-500"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${pct}%` }}
+                        transition={{ duration: 0.45, ease: EASE_OUT_EXPO }}
                       />
                     </div>
                   </div>
@@ -387,9 +417,11 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
                     {day.minutes > 0 ? `${day.minutes}m` : '0'}
                   </span>
                   <div className="flex w-full flex-1 items-end justify-center">
-                    <div
-                      className="w-full max-w-[36px] rounded-t-md bg-blue-700/90 transition-all dark:bg-blue-500"
-                      style={{ height: `${Math.max(4, heightPct)}%` }}
+                    <motion.div
+                      className="w-full max-w-[36px] rounded-t-md bg-blue-700/90 dark:bg-blue-500"
+                      initial={{ height: 0 }}
+                      animate={{ height: `${Math.max(4, heightPct)}%` }}
+                      transition={{ duration: 0.45, ease: EASE_OUT_EXPO }}
                     />
                   </div>
                   <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
@@ -577,9 +609,13 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
       </div>
 
       {/* Quiz Review Modal */}
-      {reviewingQuiz && reviewingQuiz.questions && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900">
+      <ModalShell
+        open={Boolean(reviewingQuiz && reviewingQuiz.questions)}
+        onClose={() => setReviewingQuiz(null)}
+        maxWidthClass="max-w-3xl"
+      >
+        {reviewingQuiz && reviewingQuiz.questions && (
+          <div className="flex max-h-[92vh] w-full flex-col rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 p-6 dark:border-slate-800">
               <div>
                 <p className="font-mono text-xs font-semibold text-blue-700 dark:text-blue-400">
@@ -701,13 +737,12 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
               })}
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalShell>
 
       {/* Add Course Modal */}
-      {showAddCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+      <ModalShell open={showAddCourse} onClose={() => setShowAddCourse(false)} maxWidthClass="max-w-md">
+        <div className="w-full rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between border-b border-slate-200 pb-4 dark:border-slate-800">
               <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
                 Add Tracked Course
@@ -854,8 +889,7 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
               </div>
             </form>
           </div>
-        </div>
-      )}
+      </ModalShell>
     </div>
   );
 }

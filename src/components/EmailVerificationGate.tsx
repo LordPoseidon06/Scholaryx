@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { motion } from 'motion/react';
 import { ArrowRight, CheckCircle2, LogOut, Mail, Moon, RefreshCw, Sun } from 'lucide-react';
+import { EASE_OUT_EXPO } from './MotionPrimitives';
 import { useAuth } from '../context/AuthContext';
 
 export function EmailVerificationGate() {
@@ -67,7 +69,7 @@ export function EmailVerificationGate() {
           <button
             type="button"
             onClick={toggleTheme}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
           >
             {theme === 'light' ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
             <span>{theme === 'light' ? 'Dark' : 'Light'}</span>
@@ -75,7 +77,7 @@ export function EmailVerificationGate() {
           <button
             type="button"
             onClick={() => void logout()}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
           >
             <LogOut className="h-3.5 w-3.5" />
             <span>Sign Out</span>
@@ -84,7 +86,12 @@ export function EmailVerificationGate() {
       </header>
 
       <main className="mx-auto flex max-w-lg flex-col px-6 py-16">
-        <div className="rounded-xl border border-slate-200 bg-white p-8 dark:border-slate-800 dark:bg-slate-900">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, ease: EASE_OUT_EXPO }}
+          className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+        >
           <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-400">
             <Mail className="h-5 w-5" />
           </div>
@@ -143,7 +150,7 @@ export function EmailVerificationGate() {
               </button>
             </div>
           </div>
-        </div>
+        </motion.div>
       </main>
     </div>
   );

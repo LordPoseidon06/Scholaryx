@@ -128,15 +128,140 @@ export async function readStudyFile(file: File): Promise<ParsedUploadResult> {
   };
 }
 
+export class AiHttpError extends Error {
+  status: number;
+  retryable: boolean;
+  retryAfterMs?: number;
+
+  constructor(
+    message: string,
+    options: { status: number; retryable: boolean; retryAfterMs?: number }
+  ) {
+    super(message);
+    this.name = 'AiHttpError';
+    this.status = options.status;
+    this.retryable = options.retryable;
+    this.retryAfterMs = options.retryAfterMs;
+  }
+}
+
+export function classifyAiError(err: unknown): {
+  message: string;
+  retryable: boolean;
+  reason: 'offline' | 'busy' | 'rate_limit' | 'timeout' | 'network' | 'non_retryable';
+  retryAfterMs?: number;
+} {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return {
+      message: 'Connection lost. Your request is queued and will retry automatically when back online.',
+      retryable: true,
+      reason: 'offline',
+    };
+  }
+
+  if (err instanceof AiHttpError) {
+    const reason =
+      err.status === 429
+        ? 'rate_limit'
+        : err.status === 504
+        ? 'timeout'
+        : err.retryable
+        ? 'busy'
+        : 'non_retryable';
+    return {
+      message: err.message,
+      retryable: err.retryable,
+      reason,
+      retryAfterMs: err.retryAfterMs,
+    };
+  }
+
+  const msg = err instanceof Error ? err.message : String(err || 'AI request failed.');
+  const lower = msg.toLowerCase();
+
+  if (
+    err instanceof TypeError ||
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('network error') ||
+    lower.includes('load failed')
+  ) {
+    return {
+      message: 'Temporary connection drop. Your request is queued and will retry automatically.',
+      retryable: true,
+      reason: 'network',
+    };
+  }
+
+  if (lower.includes('timed out') || lower.includes('timeout')) {
+    return {
+      message: msg,
+      retryable: true,
+      reason: 'timeout',
+    };
+  }
+
+  if (
+    lower.includes('too many') ||
+    lower.includes('rate limit') ||
+    lower.includes('quota')
+  ) {
+    return {
+      message: msg,
+      retryable: true,
+      reason: 'rate_limit',
+    };
+  }
+
+  if (
+    lower.includes('busy') ||
+    lower.includes('temporarily') ||
+    lower.includes('high demand') ||
+    lower.includes('unavailable') ||
+    lower.includes('overloaded') ||
+    lower.includes('capacity')
+  ) {
+    return {
+      message: msg,
+      retryable: true,
+      reason: 'busy',
+    };
+  }
+
+  return {
+    message: msg,
+    retryable: false,
+    reason: 'non_retryable',
+  };
+}
+
+function parseRetryAfterHeader(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(45_000, Math.round(seconds * 1000));
+  }
+  const dateMs = Date.parse(value);
+  if (Number.isFinite(dateMs)) {
+    const delta = dateMs - Date.now();
+    if (delta > 0) return Math.min(45_000, delta);
+  }
+  return undefined;
+}
+
 export async function parseAiResponse<T>(res: Response, fallbackMessage: string): Promise<T> {
+  const retryAfterMs = parseRetryAfterHeader(res.headers.get('Retry-After'));
+
   if (res.status === 413) {
-    throw new Error(
-      'This attachment exceeds the 4.5 MB serverless request limit. Paste key text excerpts or use a smaller PDF/image (under 3 MB).'
+    throw new AiHttpError(
+      'This attachment exceeds the 4.5 MB serverless request limit. Paste key text excerpts or use a smaller PDF/image (under 3 MB).',
+      { status: 413, retryable: false }
     );
   }
   if (res.status === 504) {
-    throw new Error(
-      'The AI request timed out on the server. Try fewer quiz questions or a shorter excerpt.'
+    throw new AiHttpError(
+      'The AI request timed out on the server. Queued to retry automatically.',
+      { status: 504, retryable: true, retryAfterMs }
     );
   }
 
@@ -147,24 +272,34 @@ export async function parseAiResponse<T>(res: Response, fallbackMessage: string)
       data = JSON.parse(raw) as Record<string, unknown>;
     } catch {
       if (res.status === 404) {
-        throw new Error(
-          'AI backend endpoint was not found (HTTP 404). Make sure /api functions and GEMINI_API_KEY are deployed.'
+        throw new AiHttpError(
+          'AI backend endpoint was not found (HTTP 404). Make sure /api functions and GEMINI_API_KEY are deployed.',
+          { status: 404, retryable: false }
         );
       }
       const snippet = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+      const isTransientStatus = [429, 500, 502, 503, 504].includes(res.status);
       if (!res.ok) {
-        throw new Error(
-          `${fallbackMessage} (HTTP ${res.status}${snippet ? `: ${snippet}` : ''})`
+        throw new AiHttpError(
+          `${fallbackMessage} (HTTP ${res.status}${snippet ? `: ${snippet}` : ''})`,
+          { status: res.status, retryable: isTransientStatus, retryAfterMs }
         );
       }
-      throw new Error(
-        `Unexpected non-JSON response from AI service (HTTP ${res.status}${snippet ? `: ${snippet}` : ''}).`
+      throw new AiHttpError(
+        `Unexpected non-JSON response from AI service (HTTP ${res.status}${snippet ? `: ${snippet}` : ''}).`,
+        { status: res.status || 502, retryable: true, retryAfterMs }
       );
     }
   }
 
   if (!res.ok) {
-    throw new Error(typeof data.error === 'string' && data.error ? data.error : fallbackMessage);
+    const message = typeof data.error === 'string' && data.error ? data.error : fallbackMessage;
+    const isTransientStatus = [429, 500, 502, 503, 504].includes(res.status);
+    throw new AiHttpError(message, {
+      status: res.status,
+      retryable: isTransientStatus,
+      retryAfterMs,
+    });
   }
   return data as T;
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, where } from 'firebase/firestore';
 import { Check, Download, FileText, MessageSquare, Plus, Search, Share2, Sparkles, Trash2, Upload, UserPlus, X } from 'lucide-react';
 import { MarkdownView } from '../components/MarkdownView';
+import { AiErrorBanner, ModalShell, SegmentedTabs } from '../components/MotionPrimitives';
 import { ShareToPeerModal } from '../components/ShareToPeerModal';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -371,27 +372,17 @@ export function PastQuestionsPage({
 
       {/* Filter Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-          {[
+        <SegmentedTabs
+          layoutGroup="past-questions-scope"
+          value={scope}
+          onChange={setScope}
+          options={[
             { id: 'all', label: 'All Papers' },
             { id: 'peers', label: 'From Other Students' },
             { id: 'my-courses', label: 'My Courses' },
             { id: 'mine', label: 'My Uploads' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setScope(tab.id as typeof scope)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                scope === tab.id
-                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+          ]}
+        />
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
@@ -437,7 +428,7 @@ export function PastQuestionsPage({
       {loading ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {[1, 2, 3].map((n) => (
-            <div key={n} className="h-44 animate-pulse rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900" />
+            <div key={n} className="skeleton-shimmer h-44 rounded-xl border border-slate-200 p-5 dark:border-slate-800" />
           ))}
         </div>
       ) : filtered.length === 0 ? (
@@ -463,7 +454,7 @@ export function PastQuestionsPage({
           {filtered.map((pq) => (
             <div
               key={pq.id}
-              className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 transition-colors hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
+              className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
             >
               <div>
                 <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -521,9 +512,8 @@ export function PastQuestionsPage({
       )}
 
       {/* Upload Past Question Modal */}
-      {showUpload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+      <ModalShell open={showUpload} onClose={() => setShowUpload(false)} maxWidthClass="max-w-2xl">
+        <div className="max-h-[90vh] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between border-b border-slate-200 pb-4 dark:border-slate-800">
               <div>
                 <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
@@ -714,13 +704,12 @@ export function PastQuestionsPage({
               </div>
             </form>
           </div>
-        </div>
-      )}
+      </ModalShell>
 
       {/* Selected Past Question Reader Modal */}
-      {selected && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-          <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+      <ModalShell open={Boolean(selected)} onClose={() => setSelected(null)} maxWidthClass="max-w-3xl">
+        {selected && (
+          <div className="max-h-[92vh] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4 dark:border-slate-800">
               <div>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -891,7 +880,13 @@ export function PastQuestionsPage({
 
             {/* AI Explanation Output */}
             {explainError && (
-              <p className="mt-4 text-xs font-medium text-red-600 dark:text-red-400">{explainError}</p>
+              <div className="mt-4">
+                <AiErrorBanner
+                  message={explainError}
+                  retrying={explaining}
+                  onRetry={() => void handleExplainWithAI(selected)}
+                />
+              </div>
             )}
             {aiExplanation && (
               <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50/50 p-5 dark:border-blue-900/50 dark:bg-blue-950/20">
@@ -977,8 +972,8 @@ export function PastQuestionsPage({
               </form>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalShell>
 
       <ShareToPeerModal
         resource={

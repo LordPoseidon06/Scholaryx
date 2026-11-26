@@ -12,6 +12,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
+import { isSafeAvatarUrl, MAX_PHOTO_URL_LENGTH } from '../lib/avatar';
 import { clampString } from '../lib/utils';
 import type { StudentProfile } from '../types';
 
@@ -169,8 +170,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
-        if (firebaseUser.photoURL) {
-          userPayload.photoURL = clampString(firebaseUser.photoURL, 500);
+        if (firebaseUser.photoURL && isSafeAvatarUrl(firebaseUser.photoURL)) {
+          userPayload.photoURL = clampString(firebaseUser.photoURL, MAX_PHOTO_URL_LENGTH);
         }
         await setDoc(userRef, userPayload);
       }
@@ -192,8 +193,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
-        if (firebaseUser.photoURL) {
-          profilePayload.photoURL = clampString(firebaseUser.photoURL, 500);
+        if (firebaseUser.photoURL && isSafeAvatarUrl(firebaseUser.photoURL)) {
+          profilePayload.photoURL = clampString(firebaseUser.photoURL, MAX_PHOTO_URL_LENGTH);
         }
         await setDoc(profileRef, profilePayload);
       }
@@ -370,7 +371,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .slice(0, 10);
       }
       if (updates.isPublic !== undefined) sanitized.isPublic = Boolean(updates.isPublic);
-      if (updates.photoURL !== undefined) sanitized.photoURL = clampString(updates.photoURL, 500);
+      if (updates.photoURL !== undefined) {
+        const cleaned = clampString(updates.photoURL, MAX_PHOTO_URL_LENGTH);
+        if (cleaned === '') {
+          sanitized.photoURL = '';
+        } else if (isSafeAvatarUrl(cleaned)) {
+          sanitized.photoURL = cleaned;
+        } else {
+          throw new Error('Profile picture must be a valid image file or https:// image URL.');
+        }
+      }
 
       await updateDoc(doc(db, 'profiles', user.uid), sanitized);
     } catch (err) {

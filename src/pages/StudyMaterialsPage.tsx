@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { BookOpen, Check, Download, ExternalLink, MessageSquare, Plus, Search, Share2, Sparkles, Trash2, Upload, UserPlus, X } from 'lucide-react';
 import { MarkdownView } from '../components/MarkdownView';
+import { AiErrorBanner, ModalShell, SegmentedTabs } from '../components/MotionPrimitives';
+import { PdfAnnotator } from '../components/PdfAnnotator';
 import { ShareToPeerModal } from '../components/ShareToPeerModal';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -353,27 +355,17 @@ export function StudyMaterialsPage({
 
       {/* Filters */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-          {[
+        <SegmentedTabs
+          layoutGroup="study-materials-scope"
+          value={scope}
+          onChange={setScope}
+          options={[
             { id: 'all', label: 'All Materials' },
             { id: 'peers', label: 'From Other Students' },
             { id: 'my-courses', label: 'My Courses' },
             { id: 'mine', label: 'My Uploads' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setScope(tab.id as typeof scope)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                scope === tab.id
-                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+          ]}
+        />
 
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
@@ -419,7 +411,7 @@ export function StudyMaterialsPage({
       {loading ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {[1, 2, 3].map((n) => (
-            <div key={n} className="h-44 animate-pulse rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900" />
+            <div key={n} className="skeleton-shimmer h-44 rounded-xl border border-slate-200 p-5 dark:border-slate-800" />
           ))}
         </div>
       ) : filtered.length === 0 ? (
@@ -445,7 +437,7 @@ export function StudyMaterialsPage({
           {filtered.map((mat) => (
             <div
               key={mat.id}
-              className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 transition-colors hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
+              className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
             >
               <div>
                 <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -502,9 +494,8 @@ export function StudyMaterialsPage({
       )}
 
       {/* Upload Material Modal */}
-      {showUpload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+      <ModalShell open={showUpload} onClose={() => setShowUpload(false)} maxWidthClass="max-w-2xl">
+        <div className="max-h-[90vh] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between border-b border-slate-200 pb-4 dark:border-slate-800">
               <div>
                 <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
@@ -691,13 +682,28 @@ export function StudyMaterialsPage({
               </div>
             </form>
           </div>
-        </div>
-      )}
+      </ModalShell>
 
       {/* Reader Modal */}
-      {selected && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-          <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+      {(() => {
+        const isPdfAttachment = Boolean(
+          selected &&
+            (selected.fileMimeType === 'application/pdf' ||
+              selected.fileName?.toLowerCase().endsWith('.pdf') ||
+              loadedFileDataUrl.startsWith('data:application/pdf'))
+        );
+        const isSyntheticUploadPlaceholder =
+          isPdfAttachment &&
+          Boolean(selected?.contentText?.trim().startsWith('Uploaded resource:'));
+
+        return (
+          <ModalShell
+            open={Boolean(selected)}
+            onClose={() => setSelected(null)}
+            maxWidthClass={isPdfAttachment ? 'max-w-6xl' : 'max-w-3xl'}
+          >
+            {selected && (
+          <div className="max-h-[92vh] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4 dark:border-slate-800">
               <div>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
@@ -848,7 +854,13 @@ export function StudyMaterialsPage({
             </div>
 
             {summaryError && (
-              <p className="mt-3 text-xs font-medium text-red-600 dark:text-red-400">{summaryError}</p>
+              <div className="mt-3">
+                <AiErrorBanner
+                  message={summaryError}
+                  retrying={summarizing}
+                  onRetry={() => void handleSummarizeMaterial(selected)}
+                />
+              </div>
             )}
 
             {previewSummary && (
@@ -897,7 +909,7 @@ export function StudyMaterialsPage({
             )}
 
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950">
-              <MarkdownView content={selected.contentText} />
+              {!isSyntheticUploadPlaceholder && <MarkdownView content={selected.contentText} />}
 
               {loadingAttachment && (
                 <p className="mt-4 text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -914,17 +926,21 @@ export function StudyMaterialsPage({
                 />
               )}
 
-              {loadedFileDataUrl && selected.fileMimeType === 'application/pdf' && (
-                <iframe
-                  src={loadedFileDataUrl}
-                  title={selected.fileName || 'Study material PDF'}
-                  className="mt-4 h-96 w-full rounded-lg border border-slate-200 dark:border-slate-800"
-                />
+              {loadedFileDataUrl && isPdfAttachment && (
+                <div className={isSyntheticUploadPlaceholder ? '' : 'mt-4'}>
+                  <PdfAnnotator
+                    dataUrl={loadedFileDataUrl}
+                    materialId={selected.id}
+                    fileName={selected.fileName}
+                  />
+                </div>
               )}
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalShell>
+        );
+      })()}
 
       <ShareToPeerModal
         resource={

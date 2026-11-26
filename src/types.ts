@@ -108,6 +108,31 @@ export interface StudyMaterial {
   updatedAt?: unknown;
 }
 
+export type AnnotationColor = 'amber' | 'emerald' | 'blue' | 'rose';
+
+export interface HighlightRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface MaterialAnnotation {
+  id: string;
+  authorId: string;
+  materialId: string;
+  kind: 'highlight' | 'note';
+  pageNumber: number;
+  color: AnnotationColor;
+  selectedText?: string;
+  noteText?: string;
+  rects?: HighlightRect[];
+  x?: number;
+  y?: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 

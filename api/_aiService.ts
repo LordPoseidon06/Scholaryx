@@ -109,7 +109,7 @@ function parseApiError(error: unknown): {
     lower.includes('unknown model') ||
     lower.includes('invalid model') ||
     lower.includes('model not found') ||
-    (status === 400 && lower.includes('thinking') && lower.includes('not supported'));
+    (status === 400 && lower.includes('thinking'));
 
   const isTimeout =
     (error instanceof Error &&
@@ -120,15 +120,18 @@ function parseApiError(error: unknown): {
   const retryable =
     modelNotFound ||
     isTimeout ||
-    status === 503 ||
-    status === 429 ||
+    status === 500 ||
     status === 502 ||
+    status === 503 ||
     status === 504 ||
+    status === 429 ||
     lower.includes('high demand') ||
     lower.includes('unavailable') ||
     lower.includes('overloaded') ||
     lower.includes('rate limit') ||
     lower.includes('resource_exhausted') ||
+    lower.includes('internal') ||
+    lower.includes('empty response') ||
     lower.includes('temporarily');
 
   if (status === 503 || lower.includes('high demand') || lower.includes('unavailable')) {
@@ -180,56 +183,99 @@ type GeminiContentPart =
   | { inlineData: { mimeType: string; data: string } }
   | { fileData: { fileUri: string; mimeType: string } };
 
+type ThinkingPreference = 'high' | 'medium' | 'low';
+
+interface ModelAttempt {
+  model: string;
+  thinking?: ThinkingPreference | 'none';
+  delayMs: number;
+  skipOnNotFound?: boolean;
+}
+
+function supportsThinkingLevel(model: string): boolean {
+  return model.startsWith('gemini-4') || model.startsWith('gemini-3');
+}
+
+function toThinkingEnum(pref: ThinkingPreference): ThinkingLevel {
+  if (pref === 'high') return ThinkingLevel.HIGH;
+  if (pref === 'low') return ThinkingLevel.LOW;
+  return ThinkingLevel.MEDIUM;
+}
+
+function withJitter(baseMs: number): number {
+  return Math.round(baseMs + Math.random() * Math.min(450, baseMs * 0.4));
+}
+
 async function generateWithRetryAndFallback(
   ai: GoogleGenAI,
   request: {
     contents: { parts: GeminiContentPart[] };
     config?: Record<string, unknown>;
     timeoutMs?: number;
+    maxTotalMs?: number;
+    thinkingLevel?: ThinkingPreference;
   }
 ) {
   const customModel = process.env.GEMINI_MODEL?.trim();
-  const attempts: Array<{
-    model: string;
-    useLowThinking: boolean;
-    delayMs: number;
-    skipIfModelNotFound?: boolean;
-    onlyOnNotFound?: boolean;
-  }> = [
+  const preferredThinking: ThinkingPreference = request.thinkingLevel ?? 'medium';
+
+  const attempts: ModelAttempt[] = [
     ...(customModel
-      ? [{ model: customModel, useLowThinking: false, delayMs: 0 }]
+      ? [{ model: customModel, thinking: preferredThinking, delayMs: 0 }]
       : []),
-    { model: PRIMARY_MODEL, useLowThinking: true, delayMs: 0 },
-    { model: PRIMARY_MODEL, useLowThinking: true, delayMs: 650, skipIfModelNotFound: true },
-    { model: FALLBACK_MODEL, useLowThinking: false, delayMs: 400 },
-    { model: PUBLIC_API_FALLBACK_MODEL, useLowThinking: false, delayMs: 250, onlyOnNotFound: true },
-    { model: PUBLIC_API_LITE_FALLBACK_MODEL, useLowThinking: false, delayMs: 250, onlyOnNotFound: true },
+    { model: PRIMARY_MODEL, thinking: preferredThinking, delayMs: 0, skipOnNotFound: true },
+    {
+      model: PRIMARY_MODEL,
+      thinking: preferredThinking === 'high' ? 'medium' : 'low',
+      delayMs: 650,
+      skipOnNotFound: true,
+    },
+    { model: FALLBACK_MODEL, thinking: 'low', delayMs: 450, skipOnNotFound: true },
+    { model: PUBLIC_API_FALLBACK_MODEL, thinking: 'none', delayMs: 450, skipOnNotFound: true },
+    { model: PUBLIC_API_LITE_FALLBACK_MODEL, thinking: 'none', delayMs: 550, skipOnNotFound: true },
+    { model: PRIMARY_MODEL, thinking: 'low', delayMs: 1200, skipOnNotFound: true },
   ];
 
   let lastError: unknown;
-  let sawModelNotFound = false;
-  let sawTimeout = false;
-  const perAttemptTimeoutMs = request.timeoutMs ?? 20_000;
+  const unavailableModels = new Set<string>();
+  const startedAt = Date.now();
+  const maxTotalMs = request.maxTotalMs ?? 52_000;
+  const baseTimeoutMs = request.timeoutMs ?? 24_000;
 
-  for (const attempt of attempts) {
-    if (attempt.onlyOnNotFound && !sawModelNotFound) {
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    if (attempt.skipOnNotFound && unavailableModels.has(attempt.model)) {
       continue;
     }
-    if (attempt.skipIfModelNotFound && (sawModelNotFound || sawTimeout)) {
-      continue;
+
+    const elapsed = Date.now() - startedAt;
+    const remainingBudget = maxTotalMs - elapsed;
+    if (remainingBudget < 3_000) {
+      break;
     }
-    if (attempt.delayMs > 0 && !sawModelNotFound && !sawTimeout) {
-      await sleep(attempt.delayMs);
+
+    if (attempt.delayMs > 0 && i > 0) {
+      const waitMs = Math.min(withJitter(attempt.delayMs), Math.max(0, remainingBudget - 4_000));
+      if (waitMs > 0) {
+        await sleep(waitMs);
+      }
     }
+
+    const attemptTimeoutMs = Math.max(
+      4_500,
+      Math.min(baseTimeoutMs, maxTotalMs - (Date.now() - startedAt) - 500)
+    );
+
     try {
       const config: Record<string, unknown> = { ...(request.config || {}) };
-      if (attempt.useLowThinking) {
-        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      if (attempt.thinking && attempt.thinking !== 'none' && supportsThinkingLevel(attempt.model)) {
+        config.thinkingConfig = { thinkingLevel: toThinkingEnum(attempt.thinking) };
       } else {
         delete config.thinkingConfig;
       }
+
       if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-        config.abortSignal = AbortSignal.timeout(perAttemptTimeoutMs);
+        config.abortSignal = AbortSignal.timeout(attemptTimeoutMs);
       }
 
       const response = await ai.models.generateContent({
@@ -245,14 +291,44 @@ async function generateWithRetryAndFallback(
     } catch (err) {
       lastError = err;
       const parsed = parseApiError(err);
+      const rawMsg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+
       if (parsed.modelNotFound) {
-        sawModelNotFound = true;
+        if (!rawMsg.includes('thinking')) {
+          unavailableModels.add(attempt.model);
+        } else if (supportsThinkingLevel(attempt.model)) {
+          // Retry same model once without thinkingConfig if thinking config triggered 400
+          try {
+            const strippedConfig: Record<string, unknown> = { ...(request.config || {}) };
+            delete strippedConfig.thinkingConfig;
+            if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+              strippedConfig.abortSignal = AbortSignal.timeout(attemptTimeoutMs);
+            }
+            const fallbackResp = await ai.models.generateContent({
+              model: attempt.model,
+              contents: request.contents,
+              config: strippedConfig,
+            });
+            if (fallbackResp.text && fallbackResp.text.trim()) {
+              return fallbackResp;
+            }
+          } catch (innerErr) {
+            lastError = innerErr;
+          }
+        }
         continue;
       }
-      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-        sawTimeout = true;
+
+      const isTimeout =
+        (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) ||
+        rawMsg.includes('timeout') ||
+        rawMsg.includes('aborted');
+
+      if (isTimeout) {
+        // Move straight to next lighter/faster model without throwing prematurely
         continue;
       }
+
       if (!parsed.retryable) {
         throw err;
       }
@@ -471,12 +547,102 @@ async function prepareMaterialInput(
   };
 }
 
-function parseJsonResponse<T>(rawText: string): T {
+function stripJsonFences(rawText: string): string {
   let cleaned = rawText.trim();
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   }
-  return JSON.parse(cleaned) as T;
+  return cleaned;
+}
+
+function extractBalancedObjects(arrayBody: string): Array<Record<string, unknown>> {
+  const items: Array<Record<string, unknown>> = [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let objStart = -1;
+
+  for (let i = 0; i < arrayBody.length; i++) {
+    const ch = arrayBody[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      if (depth === 0) objStart = i;
+      depth++;
+    } else if (ch === '}') {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && objStart !== -1) {
+          const slice = arrayBody.slice(objStart, i + 1);
+          try {
+            const parsed = JSON.parse(slice) as Record<string, unknown>;
+            items.push(parsed);
+          } catch {
+            // Skip malformed trailing object
+          }
+          objStart = -1;
+        }
+      }
+    }
+  }
+  return items;
+}
+
+function parseJsonResponse<T>(rawText: string): T {
+  const cleaned = stripJsonFences(rawText);
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1)) as T;
+      } catch {
+        // Fall through to partial recovery below
+      }
+    }
+
+    // Attempt partial recovery for truncated quiz/flashcard payloads
+    const titleMatch = cleaned.match(/"quizTitle"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    const questionsIdx = cleaned.indexOf('"questions"');
+    if (questionsIdx !== -1) {
+      const bracketIdx = cleaned.indexOf('[', questionsIdx);
+      if (bracketIdx !== -1) {
+        const salvaged = extractBalancedObjects(cleaned.slice(bracketIdx + 1));
+        if (salvaged.length > 0) {
+          return {
+            quizTitle: titleMatch ? titleMatch[1] : undefined,
+            questions: salvaged,
+          } as unknown as T;
+        }
+      }
+    }
+
+    const cardsIdx = cleaned.indexOf('"cards"');
+    if (cardsIdx !== -1) {
+      const bracketIdx = cleaned.indexOf('[', cardsIdx);
+      if (bracketIdx !== -1) {
+        const salvaged = extractBalancedObjects(cleaned.slice(bracketIdx + 1));
+        if (salvaged.length > 0) {
+          return { cards: salvaged } as unknown as T;
+        }
+      }
+    }
+
+    throw new Error('AI returned an incomplete response. Please try again.');
+  }
 }
 
 export async function processSummarize(body: Record<string, unknown>): Promise<AiHandlerResult> {
@@ -512,23 +678,29 @@ export async function processSummarize(body: Record<string, unknown>): Promise<A
 
     const modeInstruction =
       focusMode === 'exam'
-        ? 'Emphasize high-yield exam concepts, formulas, common traps, and likely essay or problem-solving prompts.'
+        ? 'Focus on high-yield exam mastery: include explicit formulas with variable meanings, edge-case traps, likely synthesis/essay prompts with bulleted answer outlines, and distinction tables where concepts are easily confused.'
         : focusMode === 'brief'
-        ? 'Keep the summary concise and scannable as a quick 2-minute revision sheet.'
-        : 'Provide a clear, thorough academic study guide suitable for university revision.';
+        ? 'Keep the summary crisp and scannable as a 2-minute rapid pre-class or pre-exam revision sheet.'
+        : 'Produce a comprehensive, university-honors level study guide that builds deep conceptual intuition as well as technical precision.';
 
     const promptText = [
       courseCode ? `Course: ${courseCode}` : '',
       title ? `Material Title: ${title}` : '',
       modeInstruction,
-      'Structure your output clearly in clean Markdown with these sections:',
-      '1. Core Overview (2-3 sentences)',
-      '2. Key Concepts & Definitions (bulleted)',
-      '3. Mechanisms, Proofs, or Formulas (if applicable)',
-      '4. High-Yield Exam Takeaways (3-5 actionable bullets)',
+      'Structure your output cleanly in Markdown with these sections:',
+      '## 1. Core Overview',
+      '2-3 precise sentences framing the central thesis and why it matters in the course.',
+      '## 2. Key Concepts & Definitions',
+      'Sharp definitions, distinctions, and relationships (use Markdown tables if comparing two or more related concepts).',
+      '## 3. Mechanisms, Formulas & Worked Examples',
+      'Include key equations/algorithms/proof steps and at least one concrete worked example or scenario when applicable.',
+      '## 4. Common Pitfalls & Exam Traps',
+      '2-4 common student errors or subtle distinctions tested on exams.',
+      '## 5. High-Yield Exam Takeaways',
+      '3-5 actionable revision checkpoints.',
       prepared.textContent
-        ? `\nStudy Material Content:\n${prepared.textContent.slice(0, 60000)}`
-        : '\nSummarize the attached study document.',
+        ? `\nStudy Material Content:\n${prepared.textContent.slice(0, 65000)}`
+        : '\nSummarize the attached study document thoroughly.',
     ]
       .filter(Boolean)
       .join('\n');
@@ -539,9 +711,11 @@ export async function processSummarize(body: Record<string, unknown>): Promise<A
 
     const response = await generateWithRetryAndFallback(ai, {
       contents: { parts },
+      thinkingLevel: focusMode === 'brief' ? 'low' : 'medium',
+      timeoutMs: 24_000,
       config: {
         systemInstruction:
-          'You are an academic study assistant for university students. Write accurate, structured, crystal-clear study summaries with zero filler or fluff. Format equations using plain text and Unicode math symbols (×, ÷, ≤, ≥, ≈, √, ∑, x², nᵢ) instead of raw LaTeX delimiters like $$...$$ or \\frac{}{}.',
+          'You are a top-tier university lecturer and academic study strategist. Deliver accurate, rigorous, well-structured study guides grounded strictly in the provided material with zero fluff or vague platitudes. Format formulas using plain text and Unicode math symbols (×, ÷, ≤, ≥, ≈, ≠, √, ∑, ∫, →, ⇒, x², nᵢ) instead of raw LaTeX delimiters like $$...$$ or \\frac{}{}.',
       },
     });
 
@@ -560,6 +734,93 @@ export async function processSummarize(body: Record<string, unknown>): Promise<A
       await aiClient.files.delete({ name: uploadedFileName }).catch(() => {});
     }
   }
+}
+
+interface RawQuizQuestion {
+  question?: string;
+  options?: string[];
+  correctIndex?: number;
+  explanation?: string;
+}
+
+const QUIZ_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    quizTitle: { type: Type.STRING },
+    questions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          question: { type: Type.STRING },
+          options: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+          correctIndex: { type: Type.INTEGER },
+          explanation: { type: Type.STRING },
+        },
+        required: ['question', 'options', 'correctIndex', 'explanation'],
+      },
+    },
+  },
+  required: ['quizTitle', 'questions'],
+};
+
+function normalizeAndBalanceQuestions(
+  rawList: RawQuizQuestion[],
+  limit: number
+): Array<{ question: string; options: string[]; correctIndex: number; explanation: string }> {
+  const seen = new Set<string>();
+  const normalized: Array<{
+    question: string;
+    options: string[];
+    correctIndex: number;
+    explanation: string;
+  }> = [];
+
+  for (const q of rawList) {
+    if (!q || !q.question || !Array.isArray(q.options) || q.options.length < 2) continue;
+    const questionText = String(q.question).trim().slice(0, 1800);
+    const dedupeKey = questionText.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (!dedupeKey || seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    const opts = q.options.slice(0, 4).map((o) => String(o).trim());
+    const rawIdx = Number.isFinite(q.correctIndex) ? Math.round(Number(q.correctIndex)) : 0;
+    let clampedIdx = Math.max(0, Math.min(opts.length - 1, rawIdx));
+
+    // Prevent positional-reference distortion ("Both A and B", "All of the above") before balancing
+    const hasPositionalOption = opts.some((o) =>
+      /\b(all of the above|none of the above|both [a-d] and [a-d]|above)\b/i.test(o)
+    );
+    if (!hasPositionalOption && opts.length === 4) {
+      const targetIdx = normalized.length % 4;
+      if (targetIdx !== clampedIdx) {
+        const swapped = [...opts];
+        const tmp = swapped[targetIdx];
+        swapped[targetIdx] = swapped[clampedIdx];
+        swapped[clampedIdx] = tmp;
+        clampedIdx = targetIdx;
+        opts.splice(0, 4, ...swapped);
+      }
+    }
+
+    normalized.push({
+      question: questionText,
+      options: opts,
+      correctIndex: clampedIdx,
+      explanation: String(
+        q.explanation || 'Review the corresponding concept and derivation in your course notes.'
+      )
+        .trim()
+        .slice(0, 1200),
+    });
+
+    if (normalized.length >= limit) break;
+  }
+
+  return normalized;
 }
 
 export async function processQuiz(body: Record<string, unknown>): Promise<AiHandlerResult> {
@@ -594,84 +855,107 @@ export async function processQuiz(body: Record<string, unknown>): Promise<AiHand
 
     const count = Math.min(50, Math.max(3, Number(questionCount) || 5));
     const level = difficulty || 'Exam Standard';
-    const concisenessNote =
-      count >= 25
-        ? 'Keep each question clear and each explanation concise (1-2 crisp sentences) so all questions fit completely.'
-        : 'Include a clear explanation referencing why the correct answer is right.';
 
-    const promptText = [
-      `Create exactly ${count} distinct, non-overlapping multiple-choice university study questions at "${level}" difficulty.`,
-      courseCode ? `Course: ${courseCode}` : '',
-      title ? `Topic/Source: ${title}` : '',
-      `Each question must have 4 plausible options and 1 unambiguously correct answer (zero-based index 0-3). ${concisenessNote} Write any formulas using readable Unicode characters rather than raw LaTeX.`,
-      prepared.textContent
-        ? `\nSource Material:\n${prepared.textContent.slice(0, 60000)}`
-        : '\nGenerate questions directly from the attached document.',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    const difficultyRubric =
+      level === 'Challenging'
+        ? 'Make every question genuinely demanding: require multi-step reasoning, edge-case analysis, synthesis across concepts, quantitative calculations, or subtle fault diagnosis—avoid trivial recall.'
+        : level === 'Foundational'
+        ? 'Test core definitions, conceptual intuition, cause-and-effect understanding, and clean introductory applications.'
+        : 'Match authentic university midterm/final rigor: blend conceptual understanding (~35%), applied problem-solving/calculations (~40%), and error/edge-case diagnosis (~25%).';
 
-    const parts: GeminiContentPart[] = [];
-    if (prepared.mediaPart) parts.push(prepared.mediaPart);
-    parts.push({ text: promptText });
+    // Split larger quizzes (>16 questions) into focused concurrent sub-batches for reliability, speed, and variety
+    const batchAngles = [
+      'Focus on core theoretical principles, mechanisms, definitions, and conceptual misconceptions.',
+      'Focus on applied scenarios, numerical/quantitative problems, comparisons, and boundary/edge cases.',
+      'Focus on multi-step synthesis, experimental/code/proof diagnosis, and higher-order exam transfer questions.',
+    ];
 
-    const response = await generateWithRetryAndFallback(ai, {
-      contents: { parts },
-      timeoutMs: count >= 25 ? 50_000 : 22_000,
-      config: {
-        systemInstruction:
-          'You are a university professor crafting rigorous active-recall practice questions. Always return valid JSON matching the schema with all requested questions.',
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            quizTitle: { type: Type.STRING },
-            questions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  question: { type: Type.STRING },
-                  options: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                  correctIndex: { type: Type.INTEGER },
-                  explanation: { type: Type.STRING },
-                },
-                required: ['question', 'options', 'correctIndex', 'explanation'],
-              },
-            },
-          },
-          required: ['quizTitle', 'questions'],
+    const batchSizes: number[] = [];
+    if (count <= 16) {
+      batchSizes.push(count);
+    } else if (count <= 32) {
+      const first = Math.ceil(count / 2);
+      batchSizes.push(first, count - first);
+    } else {
+      const b1 = Math.ceil(count / 3);
+      const b2 = Math.ceil((count - b1) / 2);
+      const b3 = count - b1 - b2;
+      batchSizes.push(b1, b2, b3);
+    }
+
+    const thinkingPref: ThinkingPreference = 'medium';
+
+    const runBatch = async (batchCount: number, batchIdx: number) => {
+      if (batchIdx > 0) {
+        await sleep(batchIdx * 220);
+      }
+
+      const angleInstruction =
+        batchSizes.length > 1
+          ? `Batch ${batchIdx + 1} of ${batchSizes.length}: ${batchAngles[batchIdx % batchAngles.length]} Ensure completely distinct questions from other batches.`
+          : 'Cover a balanced cognitive mix of conceptual reasoning, applied problem-solving, and edge-case diagnosis.';
+
+      const explanationGuidance =
+        batchCount >= 14
+          ? 'Keep explanations crisp (2 concise sentences: why the right option holds and why the main distractor fails).'
+          : 'Write clear explanations (2-3 sentences: why the correct choice is right and why the most tempting distractor is wrong).';
+
+      const promptText = [
+        `Create exactly ${batchCount} distinct, non-overlapping multiple-choice university questions at "${level}" difficulty.`,
+        courseCode ? `Course: ${courseCode}` : '',
+        title ? `Topic/Source: ${title}` : '',
+        difficultyRubric,
+        angleInstruction,
+        'Quality rules:',
+        '- Each question must have 4 plausible, parallel options of similar specificity and length. Do NOT use "All of the above" or "None of the above".',
+        '- Exactly 1 option is unambiguously correct (zero-based correctIndex 0-3). Vary correctIndex evenly across 0, 1, 2, 3.',
+        `- ${explanationGuidance}`,
+        '- Format any math using readable Unicode symbols (×, ÷, ≤, ≥, ≈, √, ∑, →, x², nᵢ) instead of raw LaTeX.',
+        prepared.textContent
+          ? `\nSource Material:\n${prepared.textContent.slice(0, 65000)}`
+          : '\nGenerate questions directly from the attached document.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const parts: GeminiContentPart[] = [];
+      if (prepared.mediaPart) parts.push(prepared.mediaPart);
+      parts.push({ text: promptText });
+
+      const response = await generateWithRetryAndFallback(ai, {
+        contents: { parts },
+        thinkingLevel: thinkingPref,
+        timeoutMs: batchCount >= 15 ? 30_000 : 24_000,
+        maxTotalMs: 50_000,
+        config: {
+          systemInstruction:
+            'You are a senior university professor writing rigorous, unambiguous exam questions. Always return valid JSON matching the schema with all requested questions and accurate correctIndex.',
+          responseMimeType: 'application/json',
+          responseSchema: QUIZ_SCHEMA,
         },
-      },
-    });
-
-    const parsed = parseJsonResponse<{
-      quizTitle?: string;
-      questions?: Array<{
-        question?: string;
-        options?: string[];
-        correctIndex?: number;
-        explanation?: string;
-      }>;
-    }>(response.text || '{}');
-
-    const normalizedQuestions = (Array.isArray(parsed.questions) ? parsed.questions : [])
-      .slice(0, 50)
-      .filter((q) => q && q.question && Array.isArray(q.options) && q.options.length >= 2)
-      .map((q) => {
-        const opts = (q.options || []).slice(0, 4).map((o) => String(o));
-        const rawIdx = Number.isFinite(q.correctIndex) ? Math.round(Number(q.correctIndex)) : 0;
-        const clampedIdx = Math.max(0, Math.min(opts.length - 1, rawIdx));
-        return {
-          question: String(q.question).slice(0, 1800),
-          options: opts,
-          correctIndex: clampedIdx,
-          explanation: String(q.explanation || 'Review the corresponding section in your course notes.').slice(0, 1200),
-        };
       });
+
+      return parseJsonResponse<{
+        quizTitle?: string;
+        questions?: RawQuizQuestion[];
+      }>(response.text || '{}');
+    };
+
+    const settled = await Promise.allSettled(
+      batchSizes.map((size, idx) => runBatch(size, idx))
+    );
+
+    const fulfilled = settled
+      .filter((r): r is PromiseFulfilledResult<{ quizTitle?: string; questions?: RawQuizQuestion[] }> => r.status === 'fulfilled')
+      .map((r) => r.value);
+
+    if (fulfilled.length === 0) {
+      const firstRejected = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      throw firstRejected?.reason || new Error('Quiz generation failed.');
+    }
+
+    const mergedRaw = fulfilled.flatMap((res) => (Array.isArray(res.questions) ? res.questions : []));
+    const normalizedQuestions = normalizeAndBalanceQuestions(mergedRaw, count);
 
     if (normalizedQuestions.length === 0) {
       return {
@@ -680,10 +964,15 @@ export async function processQuiz(body: Record<string, unknown>): Promise<AiHand
       };
     }
 
+    const chosenTitle =
+      fulfilled.find((f) => f.quizTitle && f.quizTitle.trim())?.quizTitle?.trim() ||
+      title ||
+      'Practice Quiz';
+
     return {
       status: 200,
       data: {
-        quizTitle: parsed.quizTitle || title || 'Practice Quiz',
+        quizTitle: chosenTitle,
         questions: normalizedQuestions,
       },
     };
@@ -727,12 +1016,13 @@ export async function processFlashcards(body: Record<string, unknown>): Promise<
     const count = Math.min(16, Math.max(4, Number(cardCount) || 8));
 
     const promptText = [
-      `Generate exactly ${count} active-recall flashcards for university exam retention.`,
+      `Generate exactly ${count} high-retention active-recall flashcards for university exam mastery.`,
       courseCode ? `Course: ${courseCode}` : '',
       title ? `Topic: ${title}` : '',
-      'Each flashcard needs a crisp question/prompt on the front, a precise answer on the back, and a short memory hint. Use readable plain text and Unicode math symbols rather than raw LaTeX.',
+      'Prioritize mechanisms, cause-and-effect prompts, key comparisons, formulas/conditions, and common pitfalls rather than trivial one-word definitions.',
+      'Each card needs a focused prompt on the front (1-2 sentences), a concise yet complete answer on the back, and an insightful memory cue/hint. Use readable Unicode math symbols instead of raw LaTeX.',
       prepared.textContent
-        ? `\nSource Notes:\n${prepared.textContent.slice(0, 60000)}`
+        ? `\nSource Notes:\n${prepared.textContent.slice(0, 65000)}`
         : '\nExtract flashcards from the attached document.',
     ]
       .filter(Boolean)
@@ -744,9 +1034,11 @@ export async function processFlashcards(body: Record<string, unknown>): Promise<
 
     const response = await generateWithRetryAndFallback(ai, {
       contents: { parts },
+      thinkingLevel: 'medium',
+      timeoutMs: 26_000,
       config: {
         systemInstruction:
-          'You create concise, high-retention active-recall flashcards for university students. Always return valid JSON matching the schema.',
+          'You create crisp, high-retention active-recall flashcards for university students. Always return valid JSON matching the schema.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -776,9 +1068,9 @@ export async function processFlashcards(body: Record<string, unknown>): Promise<
     const normalizedCards = (Array.isArray(parsed.cards) ? parsed.cards : [])
       .filter((c) => c && c.front && c.back)
       .map((c) => ({
-        front: String(c.front),
-        back: String(c.back),
-        hint: String(c.hint || 'Think about the core definition.'),
+        front: String(c.front).trim(),
+        back: String(c.back).trim(),
+        hint: String(c.hint || 'Recall the underlying principle or condition.').trim(),
       }));
 
     if (normalizedCards.length === 0) {
@@ -836,10 +1128,18 @@ export async function processExplain(body: Record<string, unknown>): Promise<AiH
     const promptText = [
       courseCode ? `Course: ${courseCode}` : '',
       title ? `Past Paper: ${title}` : '',
-      'Provide a step-by-step worked solution guide, key marking rubric points, and common mistakes to avoid for this past exam question.',
+      'Walk through this past exam question in clean Markdown using these sections:',
+      '## 1. Problem Breakdown & Core Principles',
+      'Identify what is being asked, given constraints/assumptions, and the governing theorem/concept.',
+      '## 2. Step-by-Step Worked Solution',
+      'Show every logical or mathematical step clearly with justification (handle sub-parts (a), (b), (c)... explicitly if present).',
+      '## 3. Examiner Marking Rubric Points',
+      'Bullet the exact method and final answer checkpoints that earn full marks.',
+      '## 4. Common Mistakes & Traps to Avoid',
+      'Highlight typical errors students lose marks on for this question.',
       prepared.textContent
-        ? `\nQuestion Content:\n${prepared.textContent.slice(0, 60000)}`
-        : '\nAnalyze the attached past exam paper.',
+        ? `\nQuestion Content:\n${prepared.textContent.slice(0, 65000)}`
+        : '\nAnalyze the attached past exam paper thoroughly.',
     ]
       .filter(Boolean)
       .join('\n');
@@ -850,9 +1150,11 @@ export async function processExplain(body: Record<string, unknown>): Promise<AiH
 
     const response = await generateWithRetryAndFallback(ai, {
       contents: { parts },
+      thinkingLevel: 'medium',
+      timeoutMs: 24_000,
       config: {
         systemInstruction:
-          'You are a university teaching fellow walking a student through a past exam paper with rigorous clarity. Format math using plain readable text and Unicode symbols (×, ÷, ≤, ≥, ≈, √, ∑, x²) rather than raw LaTeX delimiters.',
+          'You are an experienced university teaching fellow and exam grader walking a student through a past paper with rigorous clarity. Verify every calculation and logical transition before writing. Format math using plain readable text and Unicode symbols (×, ÷, ≤, ≥, ≈, ≠, √, ∑, ∫, →, ⇒, x², nᵢ) rather than raw LaTeX delimiters.',
       },
     });
 

@@ -245,7 +245,7 @@ export function MarkdownView({ content }: { content: string }) {
       elements.push(
         <blockquote
           key={idx}
-          className="my-2.5 border-l-2 border-blue-600 bg-blue-50/40 py-1.5 pl-3 pr-2 text-sm text-slate-700 dark:bg-blue-950/20 dark:text-slate-300"
+          className="my-2.5 rounded-lg border border-blue-200/80 bg-blue-50/40 px-3.5 py-2 text-sm text-slate-700 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-slate-300"
         >
           {renderInline(trimmed.slice(2))}
         </blockquote>

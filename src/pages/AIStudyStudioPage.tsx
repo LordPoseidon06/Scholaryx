@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import {
   Bookmark,
   Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Copy,
   Download,
   FileText,
@@ -16,16 +17,20 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  WifiOff,
   X,
   XCircle,
 } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { MarkdownView } from '../components/MarkdownView';
+import { AiErrorBanner, EASE_OUT_EXPO, SegmentedTabs } from '../components/MotionPrimitives';
 import { useAuth } from '../context/AuthContext';
+import { useAiStudioQueue, type AiStudioJobResult, type AiStudioMode, type AiStudioQueueItem } from '../lib/aiQueue';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { loadAttachmentDataUrl } from '../lib/fileChunks';
 import { downloadQuizAsHtml, downloadQuizAsMarkdown } from '../lib/quizExport';
 import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
-import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, normalizeCourseCode, parseAiResponse, readStudyFile } from '../lib/utils';
+import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, normalizeCourseCode, readStudyFile } from '../lib/utils';
 import type { GeneratedFlashcard, GeneratedQuizQuestion, PastQuestion, QuizAttempt, StudyMaterial } from '../types';
 import type { StudioPrefill } from './PastQuestionsPage';
 
@@ -101,8 +106,91 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
   const [cardFlipped, setCardFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
 
-  const [generating, setGenerating] = useState(false);
+  const [loadingStage, setLoadingStage] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const handleQueuedJobSuccess = (job: AiStudioQueueItem, result: AiStudioJobResult) => {
+    setError(null);
+    if (result.mode === 'summary') {
+      setSummaryResult(result.summary);
+      if (job.attempt > 1 || mode !== 'summary') {
+        setSavedBanner('Queued study guide finished automatically and is ready in Note Summarizer.');
+      }
+    } else if (result.mode === 'quiz') {
+      setQuizTitle(result.quizTitle);
+      setQuestions(result.questions);
+      setAnswers({});
+      setQuizSubmitted(false);
+      setActiveSavedQuizId(null);
+      setShowSavedQuizzes(false);
+      if (job.attempt > 1 || mode !== 'quiz') {
+        setSavedBanner('Queued practice quiz finished automatically and is ready in Retention Quiz.');
+      }
+    } else {
+      setCards(result.cards);
+      setCardIdx(0);
+      setCardFlipped(false);
+      setShowHint(false);
+      if (job.attempt > 1 || mode !== 'flashcards') {
+        setSavedBanner('Queued flashcard deck finished automatically and is ready in Flashcards.');
+      }
+    }
+  };
+
+  const handleQueuedJobFatalError = (_job: AiStudioQueueItem, message: string) => {
+    setError(message);
+  };
+
+  const {
+    queue,
+    nowMs,
+    isOnline,
+    enqueue,
+    retryNow,
+    cancelJob,
+  } = useAiStudioQueue({
+    uid: user?.uid,
+    onSuccess: handleQueuedJobSuccess,
+    onFatalError: handleQueuedJobFatalError,
+  });
+
+  const activeModeJob = queue.find((item) => item.mode === mode) || null;
+  const generating = activeModeJob?.status === 'running';
+  const activeModeQueued = activeModeJob && activeModeJob.status !== 'running' ? activeModeJob : null;
+  const anyRunningJob = queue.find((item) => item.status === 'running') || null;
+
+  useEffect(() => {
+    if (!generating) {
+      setLoadingStage('');
+      return;
+    }
+    const stages =
+      mode === 'quiz'
+        ? [
+            'Reading source material & learning objectives...',
+            questionCount > 16
+              ? `Synthesizing ${questionCount} exam questions across parallel batches...`
+              : `Drafting ${questionCount} conceptual & applied questions...`,
+            'Verifying answer keys, distractors, and rationales...',
+          ]
+        : mode === 'summary'
+        ? [
+            'Analyzing structure & key definitions...',
+            'Organizing core concepts, equations & exam takeaways...',
+            'Formatting study guide...',
+          ]
+        : [
+            'Extracting high-yield recall pairs...',
+            'Drafting concise prompts, hints & answers...',
+          ];
+    setLoadingStage(stages[0]);
+    let idx = 0;
+    const timer = window.setInterval(() => {
+      idx = Math.min(stages.length - 1, idx + 1);
+      setLoadingStage(stages[idx]);
+    }, 3600);
+    return () => window.clearInterval(timer);
+  }, [generating, mode, questionCount]);
 
   const loadQuizAttemptIntoWorkspace = (attempt: QuizAttempt) => {
     setMode('quiz');
@@ -188,12 +276,15 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
 
     const quizQ = query(
       collection(db, 'users', user.uid, 'quizAttempts'),
-      orderBy('createdAt', 'desc')
+      where('ownerId', '==', user.uid)
     );
     const unsubQuizzes = onSnapshot(
       quizQ,
       (snap) => {
-        setSavedQuizzes(snap.docs.map((d) => ({ id: d.id, ...d.data() } as QuizAttempt)));
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as QuizAttempt))
+          .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
+        setSavedQuizzes(docs);
       },
       (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/quizAttempts`)
     );
@@ -325,89 +416,34 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
     (!isSyntheticPlaceholder(contentText) && contentText.trim()) || fileDataUrl
   );
 
-  const handleGenerate = async () => {
-    if (!hasValidSourceInput || loadingSource) return;
-    setGenerating(true);
+  const handleGenerate = () => {
+    if (!hasValidSourceInput || loadingSource || generating) return;
     setError(null);
     setSavedBanner(null);
 
-    try {
-      if (mode === 'summary') {
-        const res = await fetch('/api/ai/summarize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title,
-            courseCode,
-            contentText,
-            fileDataUrl,
-            fileMimeType,
-            fileName,
-            focusMode,
-          }),
-        });
-        const data = await parseAiResponse<{ summary?: string }>(res, 'Summarization failed.');
-        if (!data.summary) throw new Error('AI returned an empty summary.');
-        setSummaryResult(data.summary);
-      } else if (mode === 'quiz') {
-        const res = await fetch('/api/ai/quiz', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title,
-            courseCode,
-            contentText,
-            fileDataUrl,
-            fileMimeType,
-            fileName,
-            questionCount,
-            difficulty,
-          }),
-        });
-        const data = await parseAiResponse<{
-          quizTitle?: string;
-          questions?: GeneratedQuizQuestion[];
-        }>(res, 'Quiz generation failed.');
-        if (!data.questions || data.questions.length === 0) {
-          throw new Error('Could not build quiz questions from this input. Try adding more detailed notes.');
-        }
-        setQuizTitle(data.quizTitle || title || 'Practice Quiz');
-        setQuestions(data.questions);
-        setAnswers({});
-        setQuizSubmitted(false);
-        setActiveSavedQuizId(null);
-        setShowSavedQuizzes(false);
-      } else {
-        const res = await fetch('/api/ai/flashcards', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title,
-            courseCode,
-            contentText,
-            fileDataUrl,
-            fileMimeType,
-            fileName,
-            cardCount,
-          }),
-        });
-        const data = await parseAiResponse<{ cards?: GeneratedFlashcard[] }>(
-          res,
-          'Flashcards generation failed.'
-        );
-        if (!data.cards || data.cards.length === 0) {
-          throw new Error('Could not build flashcards from this input. Try adding more detailed notes.');
-        }
-        setCards(data.cards);
-        setCardIdx(0);
-        setCardFlipped(false);
-        setShowHint(false);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'AI request failed.');
-    } finally {
-      setGenerating(false);
-    }
+    enqueue(mode, {
+      title,
+      courseCode,
+      contentText,
+      fileDataUrl,
+      fileMimeType,
+      fileName,
+      focusMode,
+      questionCount,
+      difficulty,
+      cardCount,
+    });
+  };
+
+  const getCountdownSeconds = (item: AiStudioQueueItem): number => {
+    if (!item.nextRetryAt) return 0;
+    return Math.max(0, Math.ceil((item.nextRetryAt - nowMs) / 1000));
+  };
+
+  const getModeDisplayName = (m: AiStudioMode): string => {
+    if (m === 'summary') return 'Note Summarizer';
+    if (m === 'quiz') return 'Retention Quiz';
+    return 'Flashcards';
   };
 
   const handleCopySummary = async () => {
@@ -574,29 +610,19 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
           </p>
         </div>
 
-        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-          {[
+        <SegmentedTabs
+          layoutGroup="ai-studio-mode"
+          value={mode}
+          onChange={(tab) => {
+            setMode(tab);
+            setError(null);
+          }}
+          options={[
             { id: 'summary', label: 'Note Summarizer' },
             { id: 'quiz', label: 'Retention Quiz' },
             { id: 'flashcards', label: 'Flashcards' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => {
-                setMode(tab.id as typeof mode);
-                setError(null);
-              }}
-              className={`rounded-md px-3.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                mode === tab.id
-                  ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
-                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+          ]}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -812,10 +838,68 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
             </div>
           )}
 
-          {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
-              {error}
+          {!isOnline && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-200">
+              <WifiOff className="h-3.5 w-3.5 shrink-0" />
+              <span>You are offline. Requests you submit will queue locally and run automatically once connected.</span>
             </div>
+          )}
+
+          {activeModeQueued && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-3 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-200">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex min-w-0 items-start gap-2">
+                  {activeModeQueued.status === 'paused_offline' ? (
+                    <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="font-semibold">
+                      {activeModeQueued.status === 'paused_offline'
+                        ? 'Queued — Waiting for network connection'
+                        : activeModeQueued.status === 'paused_limit'
+                        ? `Auto-retry paused after ${activeModeQueued.maxAttempts} attempts`
+                        : anyRunningJob && anyRunningJob.id !== activeModeQueued.id
+                        ? `Queued behind active ${getModeDisplayName(anyRunningJob.mode)} request`
+                        : `Queued — Retrying automatically in ${getCountdownSeconds(activeModeQueued)}s`}
+                    </p>
+                    <p className="mt-0.5 leading-relaxed opacity-90">
+                      {activeModeQueued.lastError ||
+                        'Waiting in the local queue. It will start automatically as soon as capacity is available.'}
+                    </p>
+                    <p className="mt-1 font-mono text-[11px] tabular-nums opacity-80">
+                      Attempt {activeModeQueued.attempt} of {activeModeQueued.maxAttempts}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2.5 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => retryNow(activeModeQueued.id)}
+                  className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100 whitespace-nowrap dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-100"
+                >
+                  <RotateCw className="h-3 w-3" />
+                  Retry Now
+                </button>
+                <button
+                  type="button"
+                  onClick={() => cancelJob(activeModeQueued.id)}
+                  className="rounded-md px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <AiErrorBanner
+              message={error}
+              retrying={generating}
+              onRetry={() => handleGenerate()}
+            />
           )}
           {savedBanner && (
             <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">{savedBanner}</p>
@@ -825,21 +909,96 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
             type="button"
             disabled={generating || loadingSource || !hasValidSourceInput}
             onClick={handleGenerate}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-blue-800 disabled:opacity-50 whitespace-nowrap"
           >
-            <Sparkles className="h-4 w-4" />
+            <Sparkles className={`h-4 w-4 ${generating ? 'animate-spin' : ''}`} />
             {generating
               ? mode === 'quiz' && questionCount >= 25
                 ? `Generating ${questionCount} Questions...`
                 : 'Generating with AI...'
               : loadingSource
               ? 'Loading Attachment...'
+              : activeModeQueued
+              ? 'Re-Queue Request'
               : mode === 'summary'
               ? 'Summarize Notes'
               : mode === 'quiz'
               ? `Generate ${questionCount}-Question Quiz`
               : 'Generate Flashcard Deck'}
           </button>
+
+          <AnimatePresence initial={false}>
+            {queue.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.18, ease: EASE_OUT_EXPO }}
+                className="rounded-lg border border-slate-200 bg-slate-50/90 p-3 dark:border-slate-800 dark:bg-slate-950/70"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-display text-[11px] font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                    Local Request Queue ({queue.length})
+                  </span>
+                  <span className="font-mono text-[11px] text-slate-400 tabular-nums">
+                    Auto-retry active
+                  </span>
+                </div>
+                <div className="mt-2 space-y-2">
+                  {queue.map((item) => {
+                    const countdown = getCountdownSeconds(item);
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs dark:border-slate-800 dark:bg-slate-900"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setMode(item.mode)}
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <p className="truncate font-medium text-slate-900 dark:text-slate-100">
+                            {getModeDisplayName(item.mode)}
+                            {item.courseCode ? ` · ${item.courseCode}` : ''}
+                            {item.label ? ` · ${item.label}` : ''}
+                          </p>
+                          <p className="mt-0.5 font-mono text-[11px] text-slate-500 tabular-nums dark:text-slate-400">
+                            {item.status === 'running'
+                              ? `Running attempt ${item.attempt}/${item.maxAttempts}...`
+                              : item.status === 'paused_offline'
+                              ? 'Paused (offline) · will auto-run online'
+                              : item.status === 'paused_limit'
+                              ? `Paused after ${item.maxAttempts} attempts`
+                              : `Waiting · auto-retry in ${countdown}s (${item.attempt}/${item.maxAttempts})`}
+                          </p>
+                        </button>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {item.status !== 'running' && (
+                            <button
+                              type="button"
+                              onClick={() => retryNow(item.id)}
+                              className="rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                              title="Retry immediately"
+                            >
+                              Retry Now
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => cancelJob(item.id)}
+                            className="rounded p-1 text-slate-400 hover:text-red-600"
+                            title="Cancel queued request"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Output Workspace Column */}
@@ -924,11 +1083,62 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
               </div>
 
               {generating ? (
-                <div className="space-y-3 py-10">
-                  <div className="h-4 w-1/3 animate-pulse rounded bg-slate-200 dark:bg-slate-800" />
-                  <div className="h-3 w-full animate-pulse rounded bg-slate-100 dark:bg-slate-800/70" />
-                  <div className="h-3 w-5/6 animate-pulse rounded bg-slate-100 dark:bg-slate-800/70" />
-                  <div className="h-3 w-4/6 animate-pulse rounded bg-slate-100 dark:bg-slate-800/70" />
+                <div className="space-y-4 py-8">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-blue-700 dark:text-blue-400">
+                      {loadingStage || 'Synthesizing study summary...'}
+                    </p>
+                    {activeModeJob && activeModeJob.attempt > 1 && (
+                      <span className="font-mono text-[11px] text-slate-500 tabular-nums dark:text-slate-400">
+                        Attempt {activeModeJob.attempt}/{activeModeJob.maxAttempts}
+                      </span>
+                    )}
+                  </div>
+                  <div className="skeleton-shimmer h-5 w-1/3 rounded-md" />
+                  <div className="skeleton-shimmer h-3.5 w-full rounded" />
+                  <div className="skeleton-shimmer h-3.5 w-11/12 rounded" />
+                  <div className="skeleton-shimmer h-3.5 w-4/5 rounded" />
+                  <div className="skeleton-shimmer h-3.5 w-5/6 rounded" />
+                </div>
+              ) : activeModeQueued ? (
+                <div className="my-6 rounded-xl border border-amber-200 bg-amber-50/70 p-6 dark:border-amber-900/60 dark:bg-amber-950/25">
+                  <div className="flex items-start gap-3">
+                    {activeModeQueued.status === 'paused_offline' ? (
+                      <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+                    ) : (
+                      <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {activeModeQueued.status === 'paused_offline'
+                          ? 'Study Guide Queued Until Online'
+                          : activeModeQueued.status === 'paused_limit'
+                          ? 'Auto-Retry Paused (AI Still Busy)'
+                          : `Study Guide Queued · Retrying in ${getCountdownSeconds(activeModeQueued)}s`}
+                      </h3>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                        {activeModeQueued.lastError ||
+                          'Your summarization request is queued locally and will resume automatically as soon as capacity is available.'}
+                      </p>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => retryNow(activeModeQueued.id)}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-800 whitespace-nowrap"
+                        >
+                          <RotateCw className="h-3.5 w-3.5" />
+                          Retry Now
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => cancelJob(activeModeQueued.id)}
+                          className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                        >
+                          Cancel Request
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ) : summaryResult ? (
                 <div className="mt-4">
@@ -1054,8 +1264,15 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
                 </div>
               </div>
 
-              {showSavedQuizzes && (
-                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950">
+              <AnimatePresence initial={false}>
+                {showSavedQuizzes && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2, ease: EASE_OUT_EXPO }}
+                    className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950"
+                  >
                   <div className="flex items-center justify-between">
                     <h3 className="font-display text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
                       Saved Quizzes for Review
@@ -1124,20 +1341,92 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
                         </div>
                       ))}
                   </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {questions.length > 0 && !generating && (
+                <div className="mt-4">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                    <motion.div
+                      className={`h-full rounded-full ${
+                        quizSubmitted
+                          ? currentScorePct >= 70
+                            ? 'bg-emerald-600'
+                            : 'bg-amber-500'
+                          : 'bg-blue-700 dark:bg-blue-500'
+                      }`}
+                      initial={{ width: 0 }}
+                      animate={{
+                        width: `${Math.round((answeredCount / Math.max(1, questions.length)) * 100)}%`,
+                      }}
+                      transition={{ duration: 0.28, ease: EASE_OUT_EXPO }}
+                    />
+                  </div>
                 </div>
               )}
 
               {generating ? (
-                <div className="space-y-4 py-10">
+                <div className="space-y-4 py-8">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-blue-700 dark:text-blue-400">
+                      {loadingStage || 'Preparing retention quiz...'}
+                    </p>
+                    {activeModeJob && activeModeJob.attempt > 1 && (
+                      <span className="font-mono text-[11px] text-slate-500 tabular-nums dark:text-slate-400">
+                        Attempt {activeModeJob.attempt}/{activeModeJob.maxAttempts}
+                      </span>
+                    )}
+                  </div>
                   {[1, 2, 3].map((item) => (
-                    <div key={item} className="space-y-2">
-                      <div className="h-4 w-3/4 animate-pulse rounded bg-slate-200 dark:bg-slate-800" />
+                    <div key={item} className="space-y-2.5">
+                      <div className="skeleton-shimmer h-4 w-3/4 rounded" />
                       <div className="grid grid-cols-2 gap-2">
-                        <div className="h-9 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800/70" />
-                        <div className="h-9 animate-pulse rounded-lg bg-slate-100 dark:bg-slate-800/70" />
+                        <div className="skeleton-shimmer h-9 rounded-lg" />
+                        <div className="skeleton-shimmer h-9 rounded-lg" />
                       </div>
                     </div>
                   ))}
+                </div>
+              ) : activeModeQueued ? (
+                <div className="my-6 rounded-xl border border-amber-200 bg-amber-50/70 p-6 dark:border-amber-900/60 dark:bg-amber-950/25">
+                  <div className="flex items-start gap-3">
+                    {activeModeQueued.status === 'paused_offline' ? (
+                      <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+                    ) : (
+                      <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {activeModeQueued.status === 'paused_offline'
+                          ? 'Quiz Queued Until Online'
+                          : activeModeQueued.status === 'paused_limit'
+                          ? 'Auto-Retry Paused (AI Still Busy)'
+                          : `Quiz Queued · Retrying in ${getCountdownSeconds(activeModeQueued)}s`}
+                      </h3>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                        {activeModeQueued.lastError ||
+                          'Your quiz generation request is queued locally and will retry automatically once AI capacity opens up.'}
+                      </p>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => retryNow(activeModeQueued.id)}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-800 whitespace-nowrap"
+                        >
+                          <RotateCw className="h-3.5 w-3.5" />
+                          Retry Now
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => cancelJob(activeModeQueued.id)}
+                          className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                        >
+                          Cancel Request
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ) : questions.length === 0 ? (
                 <div className="py-16 text-center text-sm text-slate-500 dark:text-slate-400">
@@ -1223,8 +1512,58 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
               </div>
 
               {generating ? (
-                <div className="py-12">
-                  <div className="h-56 w-full animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800/70" />
+                <div className="space-y-4 py-10">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-blue-700 dark:text-blue-400">
+                      {loadingStage || 'Building active-recall deck...'}
+                    </p>
+                    {activeModeJob && activeModeJob.attempt > 1 && (
+                      <span className="font-mono text-[11px] text-slate-500 tabular-nums dark:text-slate-400">
+                        Attempt {activeModeJob.attempt}/{activeModeJob.maxAttempts}
+                      </span>
+                    )}
+                  </div>
+                  <div className="skeleton-shimmer h-60 w-full rounded-xl" />
+                </div>
+              ) : activeModeQueued ? (
+                <div className="my-6 rounded-xl border border-amber-200 bg-amber-50/70 p-6 dark:border-amber-900/60 dark:bg-amber-950/25">
+                  <div className="flex items-start gap-3">
+                    {activeModeQueued.status === 'paused_offline' ? (
+                      <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+                    ) : (
+                      <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {activeModeQueued.status === 'paused_offline'
+                          ? 'Flashcards Queued Until Online'
+                          : activeModeQueued.status === 'paused_limit'
+                          ? 'Auto-Retry Paused (AI Still Busy)'
+                          : `Flashcards Queued · Retrying in ${getCountdownSeconds(activeModeQueued)}s`}
+                      </h3>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                        {activeModeQueued.lastError ||
+                          'Your flashcard deck request is queued locally and will resume automatically once AI capacity opens up.'}
+                      </p>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => retryNow(activeModeQueued.id)}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-800 whitespace-nowrap"
+                        >
+                          <RotateCw className="h-3.5 w-3.5" />
+                          Retry Now
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => cancelJob(activeModeQueued.id)}
+                          className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                        >
+                          Cancel Request
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ) : cards.length === 0 ? (
                 <div className="py-16 text-center text-sm text-slate-500 dark:text-slate-400">
@@ -1232,18 +1571,44 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
                 </div>
               ) : (
                 <div className="mt-6 space-y-5">
-                  <button
-                    type="button"
-                    onClick={() => setCardFlipped((f) => !f)}
-                    className="flex min-h-[240px] w-full flex-col items-center justify-center rounded-xl border border-slate-200 bg-slate-50 p-8 text-center transition-colors hover:border-slate-300 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-slate-600"
-                  >
-                    <span className="text-xs font-medium text-slate-400">
-                      {cardFlipped ? 'Answer (click to flip back)' : 'Prompt (click to reveal answer)'}
-                    </span>
-                    <p className="mt-4 max-w-lg font-display text-lg font-semibold leading-relaxed text-slate-900 dark:text-slate-100">
-                      {cardFlipped ? cards[cardIdx].back : cards[cardIdx].front}
-                    </p>
-                  </button>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                    <motion.div
+                      className="h-full rounded-full bg-blue-700 dark:bg-blue-500"
+                      initial={false}
+                      animate={{ width: `${Math.round(((cardIdx + 1) / Math.max(1, cards.length)) * 100)}%` }}
+                      transition={{ duration: 0.25, ease: EASE_OUT_EXPO }}
+                    />
+                  </div>
+
+                  <div className="perspective-1200">
+                    <motion.button
+                      key={cardIdx}
+                      type="button"
+                      onClick={() => setCardFlipped((f) => !f)}
+                      initial={{ opacity: 0, x: 12 }}
+                      animate={{ opacity: 1, x: 0, rotateY: cardFlipped ? 180 : 0 }}
+                      transition={{ duration: 0.42, ease: EASE_OUT_EXPO }}
+                      className="preserve-3d relative min-h-[250px] w-full cursor-pointer text-center"
+                    >
+                      <div className="backface-hidden absolute inset-0 flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-slate-50 p-8 transition-colors hover:border-slate-300 dark:border-slate-700 dark:bg-slate-950 dark:hover:border-slate-600">
+                        <span className="text-xs font-medium text-slate-400">
+                          Prompt (click to reveal answer)
+                        </span>
+                        <p className="mt-4 max-w-lg font-display text-lg font-semibold leading-relaxed text-slate-900 dark:text-slate-100">
+                          {cards[cardIdx].front}
+                        </p>
+                      </div>
+
+                      <div className="backface-hidden rotate-y-180 absolute inset-0 flex flex-col items-center justify-center rounded-xl border border-blue-200 bg-blue-50/70 p-8 dark:border-blue-800 dark:bg-blue-950/35">
+                        <span className="text-xs font-medium text-blue-700 dark:text-blue-400">
+                          Answer (click to flip back)
+                        </span>
+                        <p className="mt-4 max-w-lg font-display text-lg font-semibold leading-relaxed text-slate-900 dark:text-slate-100">
+                          {cards[cardIdx].back}
+                        </p>
+                      </div>
+                    </motion.button>
+                  </div>
 
                   {showHint && !cardFlipped && (
                     <p className="text-center text-xs text-amber-700 dark:text-amber-300">

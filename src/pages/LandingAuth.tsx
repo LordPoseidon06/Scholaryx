@@ -1,22 +1,76 @@
 import React, { useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import {
   ArrowRight,
-  BookOpen,
-  Calendar,
+  CalendarRange,
   CheckCircle2,
-  CheckSquare,
   Eye,
   EyeOff,
-  FileText,
+  FileStack,
+  LibraryBig,
+  ListChecks,
   Mail,
-  MessageSquare,
+  MessagesSquare,
   Moon,
-  Sparkles,
   Sun,
+  WandSparkles,
 } from 'lucide-react';
+import { ScholaryxLogo } from '../components/BrandLogo';
+import { EASE_OUT_EXPO, SegmentedTabs } from '../components/MotionPrimitives';
 import { useAuth } from '../context/AuthContext';
 
 type AuthMode = 'signup' | 'signin' | 'reset';
+
+const LANDING_MODULES = [
+  {
+    id: 'past-papers',
+    icon: FileStack,
+    gradient: 'from-amber-500 to-orange-600',
+    title: 'Past Questions Archive',
+    description:
+      'Upload midterms, finals, and worked solutions tagged by course code, semester, and year for peers reading the same course.',
+  },
+  {
+    id: 'ai-studio',
+    icon: WandSparkles,
+    gradient: 'from-violet-600 to-fuchsia-600',
+    title: 'AI Summaries & Retention Quizzes',
+    description:
+      'Convert uploaded notes, slides, and PDFs into structured revision guides, active-recall flashcards, and graded practice quizzes.',
+  },
+  {
+    id: undefined,
+    icon: LibraryBig,
+    gradient: 'from-sky-500 to-cyan-600',
+    title: 'Shared Notes & Slide Decks',
+    description:
+      'Publish lecture notes, lab guides, and cheat sheets to your course library and share materials straight into peer conversations.',
+  },
+  {
+    id: 'planning',
+    icon: CalendarRange,
+    gradient: 'from-rose-500 to-pink-600',
+    title: 'Exam & Assignment Calendar',
+    description:
+      'Track upcoming exam dates, assignment deadlines, lectures, and planned study blocks with live countdown indicators.',
+  },
+  {
+    id: undefined,
+    icon: ListChecks,
+    gradient: 'from-emerald-500 to-teal-600',
+    title: 'Tasks & Study Progress',
+    description:
+      'Manage coursework priorities across board and list views while tracking course grades, study hours, and quiz retention.',
+  },
+  {
+    id: 'peers',
+    icon: MessagesSquare,
+    gradient: 'from-indigo-600 to-blue-600',
+    title: 'Course Peer Finder & Chat',
+    description:
+      'Create your student profile, discover classmates enrolled in the same courses, and collaborate in real-time messaging.',
+  },
+];
 
 export function LandingAuth() {
   const {
@@ -141,67 +195,75 @@ export function LandingAuth() {
   const activeError = localError || authError;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <div className="relative min-h-screen bg-workspace-mesh text-slate-900 dark:text-slate-100">
+      {/* Subtle Architectural Backdrop */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[560px] bg-academic-grid [mask-image:linear-gradient(to_bottom,black_30%,transparent)]" />
+
       {/* 3-Zone Top Bar Contract */}
-      <header className="mx-auto flex max-w-7xl items-center justify-between gap-8 border-b border-slate-200 px-6 py-4 dark:border-slate-800">
-        <a href="#top" className="font-display text-xl font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 dark:text-slate-100">
-          Scholaryx
-        </a>
+      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/85 backdrop-blur-md dark:border-slate-800/80 dark:bg-slate-950/85">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-8 px-6 py-3.5">
+          <a href="#top" className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
+            <ScholaryxLogo size="sm" />
+            <span className="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              Scholaryx
+            </span>
+          </a>
 
-        <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
-          <a href="#past-papers" className="hover:text-slate-900 hover:underline underline-offset-4 whitespace-nowrap shrink-0 dark:hover:text-white">
-            Past Papers
-          </a>
-          <a href="#ai-studio" className="hover:text-slate-900 hover:underline underline-offset-4 whitespace-nowrap shrink-0 dark:hover:text-white">
-            AI Studio
-          </a>
-          <a href="#planning" className="hover:text-slate-900 hover:underline underline-offset-4 whitespace-nowrap shrink-0 dark:hover:text-white">
-            Planning
-          </a>
-          <a href="#peers" className="hover:text-slate-900 hover:underline underline-offset-4 whitespace-nowrap shrink-0 dark:hover:text-white">
-            Peer Network
-          </a>
-        </nav>
+          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
+            <a href="#past-papers" className="transition-colors hover:text-indigo-600 hover:underline underline-offset-4 whitespace-nowrap shrink-0 dark:hover:text-indigo-300">
+              Past Papers
+            </a>
+            <a href="#ai-studio" className="transition-colors hover:text-indigo-600 hover:underline underline-offset-4 whitespace-nowrap shrink-0 dark:hover:text-indigo-300">
+              AI Studio
+            </a>
+            <a href="#planning" className="transition-colors hover:text-indigo-600 hover:underline underline-offset-4 whitespace-nowrap shrink-0 dark:hover:text-indigo-300">
+              Planning
+            </a>
+            <a href="#peers" className="transition-colors hover:text-indigo-600 hover:underline underline-offset-4 whitespace-nowrap shrink-0 dark:hover:text-indigo-300">
+              Peer Network
+            </a>
+          </nav>
 
-        <div className="flex items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={toggleTheme}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-            aria-label="Toggle color theme"
-          >
-            {theme === 'light' ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
-            <span className="hidden sm:inline">{theme === 'light' ? 'Dark' : 'Light'}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => focusAuthCard('signin')}
-            className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            Sign In
-          </button>
-          <button
-            type="button"
-            onClick={() => focusAuthCard('signup')}
-            className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-800 whitespace-nowrap shrink-0"
-          >
-            Create Account
-          </button>
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+              aria-label="Toggle color theme"
+            >
+              {theme === 'light' ? <Moon className="h-3.5 w-3.5 text-indigo-600" /> : <Sun className="h-3.5 w-3.5 text-amber-400" />}
+              <span className="hidden sm:inline">{theme === 'light' ? 'Dark' : 'Light'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => focusAuthCard('signin')}
+              className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 whitespace-nowrap shrink-0 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => focusAuthCard('signup')}
+              className="rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-all hover:brightness-105 whitespace-nowrap shrink-0"
+            >
+              Create Account
+            </button>
+          </div>
         </div>
       </header>
 
-      <main id="top" className="mx-auto max-w-7xl px-6 py-10 lg:py-14">
+      <main id="top" className="relative z-10 mx-auto max-w-7xl px-6 py-10 lg:py-14">
         {/* Balanced 2-Column Split Hero + Multi-Email Auth Panel */}
         <section className="grid grid-cols-1 items-start gap-10 lg:grid-cols-12">
-          <div className="flex flex-col justify-between gap-7 lg:col-span-6">
+          <motion.div
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, ease: EASE_OUT_EXPO }}
+            className="flex flex-col justify-between gap-7 lg:col-span-6"
+          >
             <div className="space-y-5">
               <div className="flex items-center gap-3">
-                <img
-                  src="/images/scholaris_crest_mark_1794794845025.jpg"
-                  alt="Scholaryx academic emblem"
-                  referrerPolicy="no-referrer"
-                  className="h-11 w-11 rounded-lg border border-slate-200 object-cover dark:border-slate-800"
-                />
+                <ScholaryxLogo size="lg" />
                 <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   University Academic Workspace · Course Collaboration · AI Retention
                 </div>
@@ -219,12 +281,12 @@ export function LandingAuth() {
               </p>
             </div>
 
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-200 dark:border-slate-800 dark:bg-slate-900">
+            <div className="group overflow-hidden rounded-xl border border-slate-200 bg-slate-200 shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <img
                 src="/images/campus_library_hero_1794794846363.jpg"
                 alt="University library study tables in morning daylight"
                 referrerPolicy="no-referrer"
-                className="h-56 w-full object-cover sm:h-64"
+                className="h-56 w-full object-cover transition-transform duration-500 group-hover:scale-[1.02] sm:h-64"
               />
             </div>
 
@@ -242,7 +304,7 @@ export function LandingAuth() {
                   AI Lab
                 </p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Instant summaries, MCQs &amp; flashcards
+                  Deep summaries, MCQs &amp; flashcards
                 </p>
               </div>
               <div>
@@ -254,36 +316,28 @@ export function LandingAuth() {
                 </p>
               </div>
             </div>
-          </div>
+          </motion.div>
 
           {/* Right Column: Account Creation & Sign-In Card */}
-          <div ref={authCardRef} className="lg:col-span-6">
-            <div className="rounded-xl border border-slate-200 bg-white p-6 sm:p-8 dark:border-slate-800 dark:bg-slate-900">
+          <motion.div
+            ref={authCardRef}
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.38, delay: 0.06, ease: EASE_OUT_EXPO }}
+            className="lg:col-span-6"
+          >
+            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8 dark:border-slate-800 dark:bg-slate-900">
               {mode !== 'reset' ? (
-                <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => switchMode('signup')}
-                    className={`rounded-md py-2 text-xs font-semibold transition-colors ${
-                      mode === 'signup'
-                        ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
-                        : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-                    }`}
-                  >
-                    Create Account
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchMode('signin')}
-                    className={`rounded-md py-2 text-xs font-semibold transition-colors ${
-                      mode === 'signin'
-                        ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
-                        : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
-                    }`}
-                  >
-                    Sign In
-                  </button>
-                </div>
+                <SegmentedTabs
+                  layoutGroup="landing-auth-tabs"
+                  fullWidth
+                  value={mode === 'signup' ? 'signup' : 'signin'}
+                  onChange={(next) => switchMode(next)}
+                  options={[
+                    { id: 'signup', label: 'Create Account' },
+                    { id: 'signin', label: 'Sign In' },
+                  ]}
+                />
               ) : (
                 <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
                   <h2 className="font-display text-base font-semibold text-slate-900 dark:text-slate-100">
@@ -317,16 +371,24 @@ export function LandingAuth() {
               </div>
 
               {activeError && (
-                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
+                >
                   {activeError}
-                </div>
+                </motion.div>
               )}
 
               {resetSuccess && (
-                <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300">
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300"
+                >
                   <CheckCircle2 className="h-4 w-4 shrink-0" />
                   <span>{resetSuccess}</span>
-                </div>
+                </motion.div>
               )}
 
               <form onSubmit={handleEmailSubmit} className="mt-5 space-y-4">
@@ -342,7 +404,7 @@ export function LandingAuth() {
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
                       placeholder="e.g., Ama Mensah"
-                      className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 transition-colors focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     />
                   </div>
                 )}
@@ -360,7 +422,7 @@ export function LandingAuth() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="you@university.edu, name@outlook.com, or name@yahoo.com"
-                      className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3.5 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3.5 text-sm text-slate-900 transition-colors focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     />
                   </div>
                 </div>
@@ -390,12 +452,12 @@ export function LandingAuth() {
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
                           placeholder="At least 6 characters"
-                          className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-3.5 pr-9 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                          className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-3.5 pr-9 text-sm text-slate-900 transition-colors focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                         />
                         <button
                           type="button"
                           onClick={() => setShowPassword((v) => !v)}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-600 dark:hover:text-slate-200"
                           aria-label={showPassword ? 'Hide password' : 'Show password'}
                         >
                           {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -415,7 +477,7 @@ export function LandingAuth() {
                           value={confirmPassword}
                           onChange={(e) => setConfirmPassword(e.target.value)}
                           placeholder="Repeat password"
-                          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 transition-colors focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                         />
                       </div>
                     )}
@@ -434,7 +496,7 @@ export function LandingAuth() {
                         value={university}
                         onChange={(e) => setUniversity(e.target.value)}
                         placeholder="e.g., University of Ghana"
-                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 transition-colors focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       />
                     </div>
                     <div>
@@ -447,7 +509,7 @@ export function LandingAuth() {
                         value={program}
                         onChange={(e) => setProgram(e.target.value)}
                         placeholder="e.g., BSc Computer Science"
-                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 transition-colors focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                       />
                     </div>
                   </div>
@@ -456,7 +518,7 @@ export function LandingAuth() {
                 <button
                   type="submit"
                   disabled={submitting || googleSubmitting}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-800 disabled:opacity-60"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-semibold text-white shadow-xs transition-all hover:bg-blue-800 active:scale-[0.99] disabled:opacity-60"
                 >
                   <span>
                     {submitting
@@ -489,7 +551,7 @@ export function LandingAuth() {
                     type="button"
                     onClick={handleGoogleSignIn}
                     disabled={googleSubmitting || submitting}
-                    className="flex w-full items-center justify-center gap-2.5 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+                    className="flex w-full items-center justify-center gap-2.5 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-[0.99] disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
                   >
                     <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
                       <path
@@ -514,7 +576,7 @@ export function LandingAuth() {
                 </>
               )}
             </div>
-          </div>
+          </motion.div>
         </section>
 
         {/* Core Academic Modules */}
@@ -529,65 +591,30 @@ export function LandingAuth() {
           </div>
 
           <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-              <FileText className="h-5 w-5 text-blue-700 dark:text-blue-400" />
-              <h3 className="mt-4 font-display text-base font-semibold text-slate-900 dark:text-slate-100">
-                Past Questions Archive
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                Upload midterms, finals, and worked solutions tagged by course code, semester, and year for peers reading the same course.
-              </p>
-            </div>
-
-            <div id="ai-studio" className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-              <Sparkles className="h-5 w-5 text-blue-700 dark:text-blue-400" />
-              <h3 className="mt-4 font-display text-base font-semibold text-slate-900 dark:text-slate-100">
-                AI Summaries &amp; Retention Quizzes
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                Convert uploaded notes, slides, and PDFs into structured revision guides, active-recall flashcards, and graded practice quizzes.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-              <BookOpen className="h-5 w-5 text-blue-700 dark:text-blue-400" />
-              <h3 className="mt-4 font-display text-base font-semibold text-slate-900 dark:text-slate-100">
-                Shared Notes &amp; Slide Decks
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                Publish lecture notes, lab guides, and cheat sheets to your course library and share materials straight into peer conversations.
-              </p>
-            </div>
-
-            <div id="planning" className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-              <Calendar className="h-5 w-5 text-blue-700 dark:text-blue-400" />
-              <h3 className="mt-4 font-display text-base font-semibold text-slate-900 dark:text-slate-100">
-                Exam &amp; Assignment Calendar
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                Track upcoming exam dates, assignment deadlines, lectures, and planned study blocks with live countdown indicators.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-              <CheckSquare className="h-5 w-5 text-blue-700 dark:text-blue-400" />
-              <h3 className="mt-4 font-display text-base font-semibold text-slate-900 dark:text-slate-100">
-                Tasks &amp; Study Progress
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                Manage coursework priorities across board and list views while tracking course grades, study hours, and quiz retention.
-              </p>
-            </div>
-
-            <div id="peers" className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-              <MessageSquare className="h-5 w-5 text-blue-700 dark:text-blue-400" />
-              <h3 className="mt-4 font-display text-base font-semibold text-slate-900 dark:text-slate-100">
-                Course Peer Finder &amp; Chat
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                Create your student profile, discover classmates enrolled in the same courses, and collaborate in real-time messaging.
-              </p>
-            </div>
+            {LANDING_MODULES.map((mod, idx) => {
+              const Icon = mod.icon;
+              return (
+                <motion.div
+                  key={mod.title}
+                  id={mod.id}
+                  initial={{ opacity: 0, y: 12 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, margin: '-40px' }}
+                  transition={{ duration: 0.25, delay: idx * 0.04, ease: EASE_OUT_EXPO }}
+                  className="rounded-2xl border border-slate-200/90 bg-white p-6 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
+                >
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${mod.gradient} text-white shadow-xs`}>
+                    <Icon className="h-4.5 w-4.5" />
+                  </div>
+                  <h3 className="mt-4 font-display text-base font-semibold text-slate-900 dark:text-slate-100">
+                    {mod.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+                    {mod.description}
+                  </p>
+                </motion.div>
+              );
+            })}
           </div>
         </section>
       </main>

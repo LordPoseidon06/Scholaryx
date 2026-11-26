@@ -23,7 +23,7 @@
         },
         "photoURL": {
           "type": "string",
-          "maxLength": 500
+          "maxLength": 120000
         },
         "createdAt": {
           "type": "string",
@@ -78,7 +78,7 @@
         },
         "photoURL": {
           "type": "string",
-          "maxLength": 500
+          "maxLength": 120000
         },
         "isPublic": {
           "type": "boolean"
@@ -346,6 +346,63 @@
         }
       },
       "required": ["authorId", "authorName", "courseCode", "courseTitle", "materialType", "title", "contentText", "visibility", "createdAt", "updatedAt"]
+    },
+    "MaterialAnnotation": {
+      "title": "MaterialAnnotation",
+      "description": "Personal text highlight or sticky note pinned onto an uploaded PDF lecture slide or study material.",
+      "type": "object",
+      "properties": {
+        "authorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "materialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["highlight", "note"]
+        },
+        "pageNumber": {
+          "type": "integer"
+        },
+        "color": {
+          "type": "string",
+          "enum": ["amber", "emerald", "blue", "rose"]
+        },
+        "selectedText": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "noteText": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "rects": {
+          "type": "array",
+          "description": "Normalized [0..1] page highlight bounding rectangles (max 80)."
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["authorId", "materialId", "kind", "pageNumber", "color", "createdAt", "updatedAt"]
     },
     "StudyTask": {
       "title": "StudyTask",
@@ -674,6 +731,10 @@
     "/studyMaterials/{materialId}/fileChunks/{chunkId}": {
       "schema": { "$ref": "#/entities/FileChunk" },
       "description": "Chunked attachment data for large study materials and slide decks."
+    },
+    "/studyMaterials/{materialId}/annotations/{annotationId}": {
+      "schema": { "$ref": "#/entities/MaterialAnnotation" },
+      "description": "Personal PDF highlights and sticky notes for a study material."
     },
     "/users/{userId}/tasks/{taskId}": {
       "schema": { "$ref": "#/entities/StudyTask" },

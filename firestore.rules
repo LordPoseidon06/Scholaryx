@@ -38,6 +38,14 @@ service cloud.firestore {
         && (arr.size() == 0 || (arr[0] is string && arr[0].size() >= 1 && arr[0].size() <= maxItemLen));
     }
 
+    function isValidPhotoUrl(val) {
+      return val is string
+        && val.size() <= 120000
+        && (val == ''
+          || val.matches('^https?://.+$')
+          || val.matches('^data:image/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$'));
+    }
+
     // Validation Blueprints
     function isValidUserAccount(data) {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
@@ -45,7 +53,7 @@ service cloud.firestore {
         && isValidId(data.uid)
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
-        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('photoURL' in data) || isValidPhotoUrl(data.photoURL))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -61,7 +69,7 @@ service cloud.firestore {
         && (!('bio' in data) || (data.bio is string && data.bio.size() <= 600))
         && isValidStringList(data.courses, 15, 24)
         && (!('studyInterests' in data) || isValidStringList(data.studyInterests, 10, 60))
-        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('photoURL' in data) || isValidPhotoUrl(data.photoURL))
         && data.isPublic is bool
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -145,6 +153,34 @@ service cloud.firestore {
         && (!('fileChunkCount' in data) || (data.fileChunkCount is int && data.fileChunkCount >= 0 && data.fileChunkCount <= 250))
         && (!('externalUrl' in data) || (data.externalUrl is string && data.externalUrl.size() <= 500))
         && data.visibility in ['course', 'public', 'private']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMaterialAnnotation(data) {
+      return data.keys().hasAll(['authorId', 'materialId', 'kind', 'pageNumber', 'color', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['authorId', 'materialId', 'kind', 'pageNumber', 'color', 'selectedText', 'noteText', 'rects', 'x', 'y', 'createdAt', 'updatedAt'])
+        && isValidId(data.authorId)
+        && isValidId(data.materialId)
+        && data.kind in ['highlight', 'note']
+        && data.pageNumber is int && data.pageNumber >= 1 && data.pageNumber <= 500
+        && data.color in ['amber', 'emerald', 'blue', 'rose']
+        && (!('selectedText' in data) || (data.selectedText is string && data.selectedText.size() <= 2000))
+        && (!('noteText' in data) || (data.noteText is string && data.noteText.size() <= 2000))
+        && (!('x' in data) || ((data.x is int || data.x is float) && data.x >= 0 && data.x <= 1))
+        && (!('y' in data) || ((data.y is int || data.y is float) && data.y >= 0 && data.y <= 1))
+        && (!('rects' in data) || (
+          data.rects is list
+          && data.rects.size() <= 80
+          && (data.rects.size() == 0 || (
+            data.rects[0] is map
+            && 'x' in data.rects[0] && 'y' in data.rects[0] && 'w' in data.rects[0] && 'h' in data.rects[0]
+            && (data.rects[0].x is int || data.rects[0].x is float)
+            && (data.rects[0].y is int || data.rects[0].y is float)
+            && (data.rects[0].w is int || data.rects[0].w is float)
+            && (data.rects[0].h is int || data.rects[0].h is float)
+          ))
+        ))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -354,7 +390,7 @@ service cloud.firestore {
 
     // 2. Public Student Profiles (No PII)
     match /profiles/{userId} {
-      allow get: if isValidId(userId) && isSignedIn() && (existing().isPublic == true || isOwner(userId));
+      allow get: if isValidId(userId) && isSignedIn() && (isOwner(userId) || (resource != null && existing().isPublic == true));
       allow list: if isSignedIn() && (resource.data.isPublic == true || resource.data.uid == request.auth.uid);
       allow create: if isValidId(userId) && isVerified() && isOwner(userId)
         && isValidStudentProfile(incoming())
@@ -391,7 +427,7 @@ service cloud.firestore {
       match /comments/{commentId} {
         allow get: if isValidId(questionId) && isValidId(commentId) && isSignedIn()
           && exists(/databases/$(database)/documents/pastQuestions/$(questionId));
-        allow list: if isSignedIn() && resource.data.body is string;
+        allow list: if isValidId(questionId) && isSignedIn();
         allow create: if isValidId(questionId) && isValidId(commentId) && isVerified()
           && isValidPastQuestionComment(incoming())
           && incoming().authorId == request.auth.uid
@@ -450,11 +486,38 @@ service cloud.firestore {
         allow update: if false;
         allow delete: if isValidId(materialId) && isValidId(chunkId) && isVerified() && existing().authorId == request.auth.uid;
       }
+
+      match /annotations/{annotationId} {
+        allow get: if isValidId(materialId) && isValidId(annotationId) && isSignedIn()
+          && existing().authorId == request.auth.uid
+          && (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']
+              || get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid);
+        allow list: if isSignedIn() && resource.data.authorId == request.auth.uid;
+        allow create: if isValidId(materialId) && isValidId(annotationId) && isVerified()
+          && isValidMaterialAnnotation(incoming())
+          && incoming().authorId == request.auth.uid
+          && incoming().materialId == materialId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']
+              || get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid);
+        allow update: if isValidId(materialId) && isValidId(annotationId) && isVerified()
+          && existing().authorId == request.auth.uid
+          && isValidMaterialAnnotation(incoming())
+          && incoming().authorId == existing().authorId
+          && incoming().materialId == existing().materialId
+          && incoming().kind == existing().kind
+          && incoming().pageNumber == existing().pageNumber
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['noteText', 'color', 'x', 'y', 'updatedAt']);
+        allow delete: if isValidId(materialId) && isValidId(annotationId) && isVerified() && existing().authorId == request.auth.uid;
+      }
     }
 
     // 5. Peer-to-Peer Student Conversations
     match /conversations/{conversationId} {
-      allow get: if isValidId(conversationId) && isSignedIn() && request.auth.uid in existing().participantIds;
+      allow get: if isValidId(conversationId) && isSignedIn() && (resource == null || request.auth.uid in existing().participantIds);
       allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
       allow create: if isValidId(conversationId) && isVerified()
         && isValidConversation(incoming())

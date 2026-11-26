@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { CheckCircle2, Plus, Trash2, X } from 'lucide-react';
+import { motion } from 'motion/react';
+import { EASE_OUT_EXPO, ModalShell, SegmentedTabs } from '../components/MotionPrimitives';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { clampString, formatReadableDate, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
+import { clampString, formatReadableDate, getTimestampMillis, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
 import type { StudyTask, TaskPriority, TaskStatus } from '../types';
 
 export function TasksPage() {
@@ -25,10 +27,15 @@ export function TasksPage() {
 
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'users', user.uid, 'tasks'), orderBy('createdAt', 'desc'));
+    const q = query(collection(db, 'users', user.uid, 'tasks'), where('ownerId', '==', user.uid));
     const unsub = onSnapshot(
       q,
-      (snap) => setTasks(snap.docs.map((d) => ({ id: d.id, ...d.data() } as StudyTask))),
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as StudyTask))
+          .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
+        setTasks(docs);
+      },
       (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/tasks`)
     );
     return () => unsub();
@@ -126,30 +133,15 @@ export function TasksPage() {
 
       {/* Controls */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-          <button
-            type="button"
-            onClick={() => setViewMode('board')}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              viewMode === 'board'
-                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
-                : 'text-slate-600 dark:text-slate-400'
-            }`}
-          >
-            Board View
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('table')}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              viewMode === 'table'
-                ? 'bg-white text-slate-900 shadow-xs dark:bg-slate-900 dark:text-slate-100'
-                : 'text-slate-600 dark:text-slate-400'
-            }`}
-          >
-            Table View
-          </button>
-        </div>
+        <SegmentedTabs
+          layoutGroup="tasks-view-mode"
+          value={viewMode}
+          onChange={setViewMode}
+          options={[
+            { id: 'board', label: 'Board View' },
+            { id: 'table', label: 'Table View' },
+          ]}
+        />
 
         <div className="flex flex-wrap items-center gap-3">
           <input
@@ -196,9 +188,13 @@ export function TasksPage() {
                     <p className="py-8 text-center text-xs text-slate-400">No tasks</p>
                   ) : (
                     colTasks.map((task) => (
-                      <div
+                      <motion.div
                         key={task.id}
-                        className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
+                        layout
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.2, ease: EASE_OUT_EXPO }}
+                        className="rounded-lg border border-slate-200 bg-white p-4 transition-shadow duration-200 hover:shadow-xs dark:border-slate-800 dark:bg-slate-900"
                       >
                         <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
                           <span className="font-mono font-medium text-blue-700 dark:text-blue-400">
@@ -252,7 +248,7 @@ export function TasksPage() {
                             </button>
                           </div>
                         </div>
-                      </div>
+                      </motion.div>
                     ))
                   )}
                 </div>
@@ -327,9 +323,8 @@ export function TasksPage() {
       )}
 
       {/* New Task Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+      <ModalShell open={showModal} onClose={() => setShowModal(false)} maxWidthClass="max-w-md">
+        <div className="w-full rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between border-b border-slate-200 pb-4 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-blue-700 dark:text-blue-400" />
@@ -448,8 +443,7 @@ export function TasksPage() {
               </div>
             </form>
           </div>
-        </div>
-      )}
+      </ModalShell>
     </div>
   );
 }
