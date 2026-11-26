@@ -68,6 +68,8 @@ export interface PastQuestion {
   fileName?: string;
   fileMimeType?: string;
   fileDataUrl?: string;
+  fileSizeBytes?: number;
+  fileChunkCount?: number;
   isPublic: boolean;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -98,8 +100,35 @@ export interface StudyMaterial {
   fileName?: string;
   fileMimeType?: string;
   fileDataUrl?: string;
+  fileSizeBytes?: number;
+  fileChunkCount?: number;
   externalUrl?: string;
   visibility: MaterialVisibility;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type AnnotationColor = 'amber' | 'emerald' | 'blue' | 'rose';
+
+export interface HighlightRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface MaterialAnnotation {
+  id: string;
+  authorId: string;
+  materialId: string;
+  kind: 'highlight' | 'note';
+  pageNumber: number;
+  color: AnnotationColor;
+  selectedText?: string;
+  noteText?: string;
+  rects?: HighlightRect[];
+  x?: number;
+  y?: number;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -153,9 +182,14 @@ export interface QuizAttempt {
   ownerId: string;
   title: string;
   courseCode?: string;
+  difficulty?: string;
   score: number;
   totalQuestions: number;
+  isGraded?: boolean;
+  questions?: GeneratedQuizQuestion[];
+  selectedAnswers?: number[];
   createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 export interface Conversation {

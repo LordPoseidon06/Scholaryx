@@ -66,50 +66,241 @@ export function getInitials(name: string): string {
 export interface ParsedUploadResult {
   fileName: string;
   fileMimeType: string;
+  fileSizeBytes: number;
   extractedText?: string;
   fileDataUrl?: string;
 }
 
-const MAX_BINARY_DATA_URL_CHARS = 680000;
+export const MAX_FILE_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+export const MAX_INLINE_DATA_URL_CHARS = 650000;
+
+export function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read selected file.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export async function readStudyFile(file: File): Promise<ParsedUploadResult> {
   const name = file.name.slice(0, 180);
   const mime = (file.type || 'application/octet-stream').slice(0, 100);
+
+  if (file.size > MAX_FILE_UPLOAD_BYTES) {
+    throw new Error(
+      `File exceeds the 100 MB limit (${formatFileSize(file.size)} selected). Choose a file up to 100 MB.`
+    );
+  }
 
   const isTextLike =
     mime.startsWith('text/') ||
     /\.(txt|md|markdown|csv|json|py|ts|tsx|js|java|c|cpp|sql|tex)$/i.test(file.name);
 
   if (isTextLike) {
-    const text = await file.text();
+    const previewSlice = file.size > 200000 ? file.slice(0, 200000) : file;
+    const text = await previewSlice.text();
+    const extractedText = text.slice(0, 50000);
+    // Keep full Data URL for download/AI when text exceeds the inline preview cap
+    const fileDataUrl = file.size > 50000 ? await readAsDataUrl(file) : undefined;
     return {
       fileName: name,
       fileMimeType: mime || 'text/plain',
-      extractedText: text.slice(0, 50000),
+      fileSizeBytes: file.size,
+      extractedText,
+      fileDataUrl,
     };
   }
 
-  // Binary PDF or image: convert to base64 Data URL within Firestore 1MB safety budget
-  if (file.size > 480 * 1024) {
-    throw new Error(
-      'Binary files (PDF/images) must be under 480 KB for direct storage, or paste extracted text / add a cloud link.'
-    );
-  }
-
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Failed to read selected file.'));
-    reader.readAsDataURL(file);
-  });
-
-  if (dataUrl.length > MAX_BINARY_DATA_URL_CHARS) {
-    throw new Error('Encoded file exceeds the 680 KB document storage budget. Try a smaller file or paste text.');
-  }
-
+  const dataUrl = await readAsDataUrl(file);
   return {
     fileName: name,
     fileMimeType: mime,
+    fileSizeBytes: file.size,
     fileDataUrl: dataUrl,
   };
 }
+
+export class AiHttpError extends Error {
+  status: number;
+  retryable: boolean;
+  retryAfterMs?: number;
+
+  constructor(
+    message: string,
+    options: { status: number; retryable: boolean; retryAfterMs?: number }
+  ) {
+    super(message);
+    this.name = 'AiHttpError';
+    this.status = options.status;
+    this.retryable = options.retryable;
+    this.retryAfterMs = options.retryAfterMs;
+  }
+}
+
+export function classifyAiError(err: unknown): {
+  message: string;
+  retryable: boolean;
+  reason: 'offline' | 'busy' | 'rate_limit' | 'timeout' | 'network' | 'non_retryable';
+  retryAfterMs?: number;
+} {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return {
+      message: 'Connection lost. Your request is queued and will retry automatically when back online.',
+      retryable: true,
+      reason: 'offline',
+    };
+  }
+
+  if (err instanceof AiHttpError) {
+    const reason =
+      err.status === 429
+        ? 'rate_limit'
+        : err.status === 504
+        ? 'timeout'
+        : err.retryable
+        ? 'busy'
+        : 'non_retryable';
+    return {
+      message: err.message,
+      retryable: err.retryable,
+      reason,
+      retryAfterMs: err.retryAfterMs,
+    };
+  }
+
+  const msg = err instanceof Error ? err.message : String(err || 'AI request failed.');
+  const lower = msg.toLowerCase();
+
+  if (
+    err instanceof TypeError ||
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('network error') ||
+    lower.includes('load failed')
+  ) {
+    return {
+      message: 'Temporary connection drop. Your request is queued and will retry automatically.',
+      retryable: true,
+      reason: 'network',
+    };
+  }
+
+  if (lower.includes('timed out') || lower.includes('timeout')) {
+    return {
+      message: msg,
+      retryable: true,
+      reason: 'timeout',
+    };
+  }
+
+  if (
+    lower.includes('too many') ||
+    lower.includes('rate limit') ||
+    lower.includes('quota')
+  ) {
+    return {
+      message: msg,
+      retryable: true,
+      reason: 'rate_limit',
+    };
+  }
+
+  if (
+    lower.includes('busy') ||
+    lower.includes('temporarily') ||
+    lower.includes('high demand') ||
+    lower.includes('unavailable') ||
+    lower.includes('overloaded') ||
+    lower.includes('capacity')
+  ) {
+    return {
+      message: msg,
+      retryable: true,
+      reason: 'busy',
+    };
+  }
+
+  return {
+    message: msg,
+    retryable: false,
+    reason: 'non_retryable',
+  };
+}
+
+function parseRetryAfterHeader(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(45_000, Math.round(seconds * 1000));
+  }
+  const dateMs = Date.parse(value);
+  if (Number.isFinite(dateMs)) {
+    const delta = dateMs - Date.now();
+    if (delta > 0) return Math.min(45_000, delta);
+  }
+  return undefined;
+}
+
+export async function parseAiResponse<T>(res: Response, fallbackMessage: string): Promise<T> {
+  const retryAfterMs = parseRetryAfterHeader(res.headers.get('Retry-After'));
+
+  if (res.status === 413) {
+    throw new AiHttpError(
+      'This attachment exceeds the 4.5 MB serverless request limit. Paste key text excerpts or use a smaller PDF/image (under 3 MB).',
+      { status: 413, retryable: false }
+    );
+  }
+  if (res.status === 504) {
+    throw new AiHttpError(
+      'The AI request timed out on the server. Queued to retry automatically.',
+      { status: 504, retryable: true, retryAfterMs }
+    );
+  }
+
+  const raw = await res.text();
+  let data: Record<string, unknown> = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      if (res.status === 404) {
+        throw new AiHttpError(
+          'AI backend endpoint was not found (HTTP 404). Make sure /api functions and GEMINI_API_KEY are deployed.',
+          { status: 404, retryable: false }
+        );
+      }
+      const snippet = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+      const isTransientStatus = [429, 500, 502, 503, 504].includes(res.status);
+      if (!res.ok) {
+        throw new AiHttpError(
+          `${fallbackMessage} (HTTP ${res.status}${snippet ? `: ${snippet}` : ''})`,
+          { status: res.status, retryable: isTransientStatus, retryAfterMs }
+        );
+      }
+      throw new AiHttpError(
+        `Unexpected non-JSON response from AI service (HTTP ${res.status}${snippet ? `: ${snippet}` : ''}).`,
+        { status: res.status || 502, retryable: true, retryAfterMs }
+      );
+    }
+  }
+
+  if (!res.ok) {
+    const message = typeof data.error === 'string' && data.error ? data.error : fallbackMessage;
+    const isTransientStatus = [429, 500, 502, 503, 504].includes(res.status);
+    throw new AiHttpError(message, {
+      status: res.status,
+      retryable: isTransientStatus,
+      retryAfterMs,
+    });
+  }
+  return data as T;
+}
+

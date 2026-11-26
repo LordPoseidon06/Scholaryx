@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { addDoc, collection, doc, getDoc, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { Check, Copy, Send, X } from 'lucide-react';
+import { ModalShell } from './MotionPrimitives';
+import { UserAvatar } from './UserAvatar';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { clampString, getConversationId, getInitials } from '../lib/utils';
+import { clampString, getConversationId } from '../lib/utils';
 import type { StudentProfile } from '../types';
 
 interface ShareResourcePayload {
@@ -26,10 +28,12 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
   const [note, setNote] = useState('');
   const [sendingTo, setSendingTo] = useState<string | null>(null);
   const [sentIds, setSentIds] = useState<Record<string, boolean>>({});
+  const [shareError, setShareError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!resource || !user) return;
+    setShareError(null);
     const q = query(collection(db, 'profiles'), where('isPublic', '==', true));
     const unsub = onSnapshot(
       q,
@@ -46,7 +50,7 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
     return () => unsub();
   }, [resource, user]);
 
-  if (!resource || !user) return null;
+  const isOpen = Boolean(resource && user);
 
   const filteredPeers = peers.filter((p) => {
     const q = search.trim().toLowerCase();
@@ -59,13 +63,16 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
   });
 
   // Sort peers taking the exact same course first
-  const sortedPeers = [...filteredPeers].sort((a, b) => {
-    const aSame = a.courses.includes(resource.courseCode) ? 1 : 0;
-    const bSame = b.courses.includes(resource.courseCode) ? 1 : 0;
-    return bSame - aSame;
-  });
+  const sortedPeers = resource
+    ? [...filteredPeers].sort((a, b) => {
+        const aSame = a.courses.includes(resource.courseCode) ? 1 : 0;
+        const bSame = b.courses.includes(resource.courseCode) ? 1 : 0;
+        return bSame - aSame;
+      })
+    : [];
 
   const handleCopyShareText = async () => {
+    if (!resource) return;
     const shareSummary = `${resource.courseCode} · ${resource.title}\nShared via Scholaryx (${window.location.origin}/?resource=${resource.type}:${resource.id})`;
     await navigator.clipboard.writeText(shareSummary);
     setCopied(true);
@@ -73,23 +80,30 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
   };
 
   const handleSendToPeer = async (peer: StudentProfile) => {
+    if (!resource || !user || peer.uid === user.uid || sendingTo) return;
     setSendingTo(peer.uid);
+    setShareError(null);
     const convId = getConversationId(user.uid, peer.uid);
     const sortedParticipants = [user.uid, peer.uid].sort();
-    const sortedNames =
-      sortedParticipants[0] === user.uid
-        ? [clampString(profile?.displayName || user.displayName || 'Student', 120), clampString(peer.displayName, 120)]
-        : [clampString(peer.displayName, 120), clampString(profile?.displayName || user.displayName || 'Student', 120)];
+    const myName = clampString(profile?.displayName || user.displayName || 'Student', 120) || 'Student';
+    const peerName = clampString(peer.displayName, 120) || 'Student';
+    const sortedNames = sortedParticipants[0] === user.uid ? [myName, peerName] : [peerName, myName];
 
     const messageText = clampString(
       note.trim() || `Shared ${resource.courseCode} ${resource.type === 'pastQuestion' ? 'past paper' : 'study material'}: ${resource.title}`,
       4000
-    );
+    ) || 'Shared study resource';
+
+    let currentOp: (typeof OperationType)[keyof typeof OperationType] = OperationType.GET;
+    let currentPath = `conversations/${convId}`;
 
     try {
       const convRef = doc(db, 'conversations', convId);
       const convSnap = await getDoc(convRef);
+      let participantIds = sortedParticipants;
+
       if (!convSnap.exists()) {
+        currentOp = OperationType.CREATE;
         await setDoc(convRef, {
           participantIds: sortedParticipants,
           participantNames: sortedNames,
@@ -98,20 +112,27 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
           updatedAt: serverTimestamp(),
         });
       } else {
+        const existingData = convSnap.data();
+        if (Array.isArray(existingData?.participantIds) && existingData.participantIds.length === 2) {
+          participantIds = existingData.participantIds as string[];
+        }
+        currentOp = OperationType.UPDATE;
         await updateDoc(convRef, {
           lastMessage: clampString(messageText, 300),
           updatedAt: serverTimestamp(),
         });
       }
 
+      currentOp = OperationType.CREATE;
+      currentPath = `conversations/${convId}/messages`;
       await addDoc(collection(db, 'conversations', convId, 'messages'), {
         senderId: user.uid,
-        senderName: clampString(profile?.displayName || user.displayName || 'Student', 120),
-        participantIds: sortedParticipants,
+        senderName: myName,
+        participantIds,
         text: messageText,
         sharedResourceType: resource.type,
         sharedResourceId: resource.id,
-        sharedResourceTitle: clampString(resource.title, 180),
+        sharedResourceTitle: clampString(resource.title, 180) || 'Shared Resource',
         sharedResourceCourse: clampString(resource.courseCode, 24),
         createdAt: serverTimestamp(),
       });
@@ -119,15 +140,17 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
       setSentIds((prev) => ({ ...prev, [peer.uid]: true }));
       onShared?.(peer.displayName);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `conversations/${convId}/messages`);
+      setShareError(err instanceof Error ? err.message : 'Unable to send resource to this peer.');
+      handleFirestoreError(err, currentOp, currentPath);
     } finally {
       setSendingTo(null);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+    <ModalShell open={isOpen} onClose={onClose} maxWidthClass="max-w-lg">
+      {resource && (
+        <div className="w-full rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4 dark:border-slate-800">
           <div>
             <h3 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
@@ -175,6 +198,12 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
             />
           </div>
 
+          {shareError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+              {shareError}
+            </div>
+          )}
+
           <div>
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
@@ -201,9 +230,12 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
                   return (
                     <div key={peer.uid} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
                       <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                          {getInitials(peer.displayName)}
-                        </div>
+                        <UserAvatar
+                          name={peer.displayName}
+                          photoURL={peer.photoURL}
+                          size="sm"
+                          variant="slate"
+                        />
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
                             {peer.displayName}
@@ -240,7 +272,8 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
             </div>
           </div>
         </div>
-      </div>
-    </div>
+        </div>
+      )}
+    </ModalShell>
   );
 }

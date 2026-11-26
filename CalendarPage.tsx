@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Calendar as CalendarIcon, Check, ChevronLeft, ChevronRight, Plus, Trash2, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { EASE_OUT_EXPO, ModalShell } from '../components/MotionPrimitives';
 import { useAuth } from '../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { clampString, formatReadableDate, getDaysUntil, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
@@ -29,10 +31,15 @@ export function CalendarPage() {
 
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'users', user.uid, 'events'), orderBy('date', 'asc'));
+    const q = query(collection(db, 'users', user.uid, 'events'), where('ownerId', '==', user.uid));
     const unsub = onSnapshot(
       q,
-      (snap) => setEvents(snap.docs.map((d) => ({ id: d.id, ...d.data() } as CalendarEvent))),
+      (snap) => {
+        const docs = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as CalendarEvent))
+          .sort((a, b) => a.date.localeCompare(b.date));
+        setEvents(docs);
+      },
       (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/events`)
     );
     return () => unsub();
@@ -199,7 +206,15 @@ export function CalendarPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-7 border-t border-l border-slate-200 text-center text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={monthLabel}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
+              className="grid grid-cols-7 border-t border-l border-slate-200 text-center text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400"
+            >
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((dayName) => (
               <div key={dayName} className="border-r border-b border-slate-200 py-2 dark:border-slate-800">
                 {dayName}
@@ -267,7 +282,8 @@ export function CalendarPage() {
                 </button>
               );
             })}
-          </div>
+            </motion.div>
+          </AnimatePresence>
         </div>
 
         {/* Selected Date + Upcoming Exam Queue */}
@@ -387,9 +403,8 @@ export function CalendarPage() {
       </div>
 
       {/* Add Event Modal */}
-      {showAdd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+      <ModalShell open={showAdd} onClose={() => setShowAdd(false)} maxWidthClass="max-w-lg">
+        <div className="w-full rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between border-b border-slate-200 pb-4 dark:border-slate-800">
               <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
                 Schedule Assignment or Exam
@@ -517,8 +532,7 @@ export function CalendarPage() {
               </div>
             </form>
           </div>
-        </div>
-      )}
+      </ModalShell>
     </div>
   );
 }
