@@ -226,7 +226,7 @@ export function CalendarPage() {
                 return (
                   <div
                     key={idx}
-                    className="min-h-[84px] border-r border-b border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-950/40"
+                    className="min-h-[54px] sm:min-h-[84px] border-r border-b border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-950/40"
                   />
                 );
               }
@@ -239,14 +239,14 @@ export function CalendarPage() {
                   key={cell.iso}
                   type="button"
                   onClick={() => setSelectedDate(cell.iso!)}
-                  className={`flex min-h-[84px] flex-col items-start border-r border-b border-slate-200 p-2 text-left transition-colors dark:border-slate-800 ${
+                  className={`flex min-h-[54px] sm:min-h-[84px] flex-col items-start border-r border-b border-slate-200 p-1 sm:p-2 text-left transition-colors dark:border-slate-800 ${
                     isSelected
                       ? 'bg-blue-50/70 dark:bg-blue-950/40'
                       : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
                   }`}
                 >
                   <span
-                    className={`font-mono text-xs tabular-nums ${
+                    className={`font-mono text-[11px] sm:text-xs tabular-nums ${
                       isToday
                         ? 'rounded bg-blue-700 px-1.5 py-0.5 font-semibold text-white'
                         : 'font-medium text-slate-700 dark:text-slate-300'
@@ -255,7 +255,28 @@ export function CalendarPage() {
                     {cell.day}
                   </span>
 
-                  <div className="mt-1.5 w-full space-y-1">
+                  {/* Compact mobile dots (< sm) */}
+                  {dayEvents.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1 sm:hidden">
+                      {dayEvents.slice(0, 3).map((ev) => (
+                        <span
+                          key={ev.id}
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            ev.completed
+                              ? 'bg-slate-300 dark:bg-slate-600'
+                              : ev.eventType === 'exam'
+                              ? 'bg-red-500'
+                              : ev.eventType === 'assignment'
+                              ? 'bg-amber-500'
+                              : 'bg-blue-600'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Full event pills (>= sm) */}
+                  <div className="mt-1.5 hidden w-full space-y-1 sm:block">
                     {dayEvents.slice(0, 2).map((ev) => (
                       <div
                         key={ev.id}

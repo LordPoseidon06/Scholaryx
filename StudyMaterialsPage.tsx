@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { BookOpen, Check, Download, ExternalLink, MessageSquare, Plus, Search, Share2, Sparkles, Trash2, Upload, UserPlus, X } from 'lucide-react';
+import { BookOpen, Bookmark, Check, Download, ExternalLink, MessageSquare, Plus, Search, Share2, Sparkles, Trash2, Upload, UserPlus, X } from 'lucide-react';
+import { LecturerAcknowledgement } from '../components/LecturerAcknowledgement';
 import { MarkdownView } from '../components/MarkdownView';
 import { AiErrorBanner, ModalShell, SegmentedTabs } from '../components/MotionPrimitives';
 import { PdfAnnotator } from '../components/PdfAnnotator';
 import { ShareToPeerModal } from '../components/ShareToPeerModal';
 import { useAuth } from '../context/AuthContext';
+import { useBookmarks } from '../lib/bookmarks';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { deleteFileChunks, loadAttachmentDataUrl, splitDataUrlIntoChunks, uploadFileChunks } from '../lib/fileChunks';
 import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
-import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, parseAiResponse, readStudyFile } from '../lib/utils';
+import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, isPdfAttachment, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, parseAiResponse, readStudyFile } from '../lib/utils';
 import type { MaterialTypeOption, MaterialVisibility, StudyMaterial } from '../types';
 import type { StudioPrefill } from './PastQuestionsPage';
 
@@ -27,11 +29,12 @@ export function StudyMaterialsPage({
   onSendToAIStudio,
 }: StudyMaterialsPageProps) {
   const { user, profile, updateProfileData } = useAuth();
+  const { bookmarkedMaterialIds, toggleBookmark, isBookmarked } = useBookmarks(user?.uid);
   const [sharedMaterials, setSharedMaterials] = useState<StudyMaterial[]>([]);
   const [myPrivateMaterials, setMyPrivateMaterials] = useState<StudyMaterial[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [scope, setScope] = useState<'all' | 'peers' | 'my-courses' | 'mine'>('all');
+  const [scope, setScope] = useState<'all' | 'peers' | 'my-courses' | 'saved' | 'mine'>('all');
   const [courseFilter, setCourseFilter] = useState<string>('ALL');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
 
@@ -142,6 +145,7 @@ export function StudyMaterialsPage({
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     setUploadError(null);
     try {
@@ -318,6 +322,7 @@ export function StudyMaterialsPage({
   const filtered = mergedMaterials.filter((m) => {
     if (scope === 'mine' && m.authorId !== user?.uid) return false;
     if (scope === 'peers' && m.authorId === user?.uid) return false;
+    if (scope === 'saved' && !bookmarkedMaterialIds.includes(m.id)) return false;
     if (scope === 'my-courses' && myCourses.length > 0 && !myCourses.includes(m.courseCode)) return false;
     if (courseFilter !== 'ALL' && m.courseCode !== courseFilter) return false;
     if (typeFilter !== 'ALL' && m.materialType !== typeFilter) return false;
@@ -339,7 +344,7 @@ export function StudyMaterialsPage({
             Study Materials &amp; Notes Library
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Access lecture notes, slides, and cheat sheets shared by students across courses, or upload your own.
+            Access lecture notes, slides, and cheat sheets shared across courses, or upload your own.
           </p>
         </div>
 
@@ -353,6 +358,8 @@ export function StudyMaterialsPage({
         </button>
       </div>
 
+      <LecturerAcknowledgement />
+
       {/* Filters */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <SegmentedTabs
@@ -361,8 +368,9 @@ export function StudyMaterialsPage({
           onChange={setScope}
           options={[
             { id: 'all', label: 'All Materials' },
-            { id: 'peers', label: 'From Other Students' },
+            { id: 'peers', label: 'From Students' },
             { id: 'my-courses', label: 'My Courses' },
+            { id: 'saved', label: `Saved (${bookmarkedMaterialIds.length})` },
             { id: 'mine', label: 'My Uploads' },
           ]}
         />
@@ -466,7 +474,20 @@ export function StudyMaterialsPage({
                 <span className="truncate text-xs text-slate-500 dark:text-slate-400">
                   {mat.authorName} · {formatTimestamp(mat.createdAt)}
                 </span>
-                <div className="flex shrink-0 items-center gap-1.5">
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleBookmark('materials', mat.id)}
+                    className={`rounded-md p-1.5 transition-colors ${
+                      isBookmarked('materials', mat.id)
+                        ? 'text-amber-600 bg-amber-50 dark:bg-amber-950/50 dark:text-amber-400'
+                        : 'text-slate-400 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-100'
+                    }`}
+                    title={isBookmarked('materials', mat.id) ? 'Remove bookmark' : 'Save for quick revision'}
+                    aria-label={isBookmarked('materials', mat.id) ? 'Remove bookmark' : 'Save material'}
+                  >
+                    <Bookmark className={`h-3.5 w-3.5 ${isBookmarked('materials', mat.id) ? 'fill-current' : ''}`} />
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShareTarget(mat)}
@@ -618,27 +639,29 @@ export function StudyMaterialsPage({
                   )}
                 </div>
                 <label className="mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800">
-                  <Upload className="h-4 w-4" />
-                  <span>Select file to attach or import text (max 100 MB)</span>
+                  <Upload className="h-4 w-4 shrink-0" />
+                  <span>Choose document, slides, PDF, or image (max 100 MB)</span>
                   <input
                     type="file"
-                    accept=".txt,.md,.markdown,.csv,.json,.tex,.pdf,.ppt,.pptx,.doc,.docx,image/png,image/jpeg,image/webp,image/gif"
                     onChange={handleFileChange}
-                    className="hidden"
+                    className="sr-only"
                   />
                 </label>
+                <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  On Android &amp; Samsung phones, tap Files / Documents / Drive to pick PDFs, slides, or Word files.
+                </p>
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Short Description (optional)
+                  Lecturer Credit / Short Description (optional)
                 </label>
                 <input
                   type="text"
                   maxLength={1000}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Key topics covered in these notes or slides..."
+                  placeholder="e.g. Lecture slides provided by Dr. Mensah — Week 4 Cellular Respiration..."
                   className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                 />
               </div>
@@ -686,21 +709,23 @@ export function StudyMaterialsPage({
 
       {/* Reader Modal */}
       {(() => {
-        const isPdfAttachment = Boolean(
+        const isPdfDoc = Boolean(
           selected &&
-            (selected.fileMimeType === 'application/pdf' ||
-              selected.fileName?.toLowerCase().endsWith('.pdf') ||
-              loadedFileDataUrl.startsWith('data:application/pdf'))
+            isPdfAttachment({
+              fileMimeType: selected.fileMimeType,
+              fileName: selected.fileName,
+              dataUrl: loadedFileDataUrl,
+            })
         );
         const isSyntheticUploadPlaceholder =
-          isPdfAttachment &&
+          isPdfDoc &&
           Boolean(selected?.contentText?.trim().startsWith('Uploaded resource:'));
 
         return (
           <ModalShell
             open={Boolean(selected)}
             onClose={() => setSelected(null)}
-            maxWidthClass={isPdfAttachment ? 'max-w-6xl' : 'max-w-3xl'}
+            maxWidthClass={isPdfDoc ? 'max-w-6xl' : 'max-w-3xl'}
           >
             {selected && (
           <div className="max-h-[92vh] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
@@ -780,6 +805,19 @@ export function StudyMaterialsPage({
                 className="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
               >
                 Create Flashcards
+              </button>
+
+              <button
+                type="button"
+                onClick={() => toggleBookmark('materials', selected.id)}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-medium whitespace-nowrap ${
+                  isBookmarked('materials', selected.id)
+                    ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                    : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                }`}
+              >
+                <Bookmark className={`h-3.5 w-3.5 ${isBookmarked('materials', selected.id) ? 'fill-current' : ''}`} />
+                {isBookmarked('materials', selected.id) ? 'Saved' : 'Save'}
               </button>
 
               <button
@@ -926,7 +964,7 @@ export function StudyMaterialsPage({
                 />
               )}
 
-              {loadedFileDataUrl && isPdfAttachment && (
+              {loadedFileDataUrl && isPdfDoc && (
                 <div className={isSyntheticUploadPlaceholder ? '' : 'mt-4'}>
                   <PdfAnnotator
                     dataUrl={loadedFileDataUrl}
@@ -935,6 +973,10 @@ export function StudyMaterialsPage({
                   />
                 </div>
               )}
+            </div>
+
+            <div className="mt-4">
+              <LecturerAcknowledgement variant="compact" />
             </div>
           </div>
         )}

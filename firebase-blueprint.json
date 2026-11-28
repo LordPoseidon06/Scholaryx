@@ -697,6 +697,79 @@
         }
       },
       "required": ["authorId", "chunkIndex", "data", "isReadablePublicly"]
+    },
+    "BlockedUser": {
+      "title": "BlockedUser",
+      "description": "Administrator-managed blocklist entry revoking workspace access for a user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "blockedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "blockedBy", "createdAt", "updatedAt"]
+    },
+    "PlatformConfig": {
+      "title": "PlatformConfig",
+      "description": "Administrator-controlled platform notice and workspace configuration.",
+      "type": "object",
+      "properties": {
+        "announcementTitle": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "announcementBody": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "announcementTone": {
+          "type": "string",
+          "enum": ["info", "warning", "success"]
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["announcementTitle", "announcementBody", "announcementTone", "isActive", "updatedBy", "updatedAt"]
     }
   },
   "firestore": {
@@ -759,6 +832,14 @@
     "/conversations/{conversationId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/ChatMessage" },
       "description": "Messages and shared study resources inside a conversation."
+    },
+    "/blockedUsers/{userId}": {
+      "schema": { "$ref": "#/entities/BlockedUser" },
+      "description": "Administrator-managed blocked user records."
+    },
+    "/appConfig/{configId}": {
+      "schema": { "$ref": "#/entities/PlatformConfig" },
+      "description": "Administrator-controlled workspace announcements."
     }
   }
 }

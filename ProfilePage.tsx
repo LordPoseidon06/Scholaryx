@@ -204,9 +204,9 @@ export function ProfilePage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept="image/*"
                 onChange={handlePhotoFileChange}
-                className="hidden"
+                className="sr-only"
               />
             </div>
 
@@ -403,7 +403,7 @@ export function ProfilePage() {
           <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
             Enrolled Course Codes (used to match notes, past questions, and study peers)
           </label>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <input
               type="text"
               value={newCourse}
@@ -415,7 +415,7 @@ export function ProfilePage() {
                 }
               }}
               placeholder="e.g. CS301, MATH204"
-              className="w-60 rounded-lg border border-slate-200 bg-white px-3.5 py-2 font-mono text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="min-w-0 flex-1 sm:max-w-xs rounded-lg border border-slate-200 bg-white px-3.5 py-2 font-mono text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
             <button
               type="button"
@@ -449,7 +449,7 @@ export function ProfilePage() {
           <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
             Study Interests &amp; Focus Areas
           </label>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <input
               type="text"
               value={newInterest}
@@ -461,7 +461,7 @@ export function ProfilePage() {
                 }
               }}
               placeholder="e.g. Algorithms, Econometrics"
-              className="w-60 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="min-w-0 flex-1 sm:max-w-xs rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
             <button
               type="button"
@@ -489,8 +489,8 @@ export function ProfilePage() {
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-slate-200 pt-5 dark:border-slate-800">
-          <label className="flex items-center gap-2.5 text-sm text-slate-700 dark:text-slate-300">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 pt-5 dark:border-slate-800">
+          <label className="flex items-start sm:items-center gap-2.5 text-sm text-slate-700 dark:text-slate-300">
             <input
               type="checkbox"
               checked={isPublic}

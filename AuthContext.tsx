@@ -12,9 +12,10 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
+import { isVerifiedAdmin } from '../lib/admin';
 import { isSafeAvatarUrl, MAX_PHOTO_URL_LENGTH } from '../lib/avatar';
 import { clampString } from '../lib/utils';
-import type { StudentProfile } from '../types';
+import type { BlockedUserRecord, PlatformConfigRecord, StudentProfile } from '../types';
 
 export interface SignUpWithEmailPayload {
   displayName: string;
@@ -35,6 +36,9 @@ interface PendingProfileDetails {
 interface AuthContextValue {
   user: User | null;
   profile: StudentProfile | null;
+  isAdmin: boolean;
+  blockedRecord: BlockedUserRecord | null;
+  platformConfig: PlatformConfigRecord | null;
   loading: boolean;
   authError: string | null;
   theme: 'light' | 'dark';
@@ -113,6 +117,8 @@ function clearPendingProfile(uid: string): void {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<StudentProfile | null>(null);
+  const [blockedRecord, setBlockedRecord] = useState<BlockedUserRecord | null>(null);
+  const [platformConfig, setPlatformConfig] = useState<PlatformConfigRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -121,6 +127,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   const unsubProfileRef = useRef<(() => void) | undefined>(undefined);
+  const unsubBlockRef = useRef<(() => void) | undefined>(undefined);
+  const unsubConfigRef = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -135,11 +143,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthError(null);
   }, []);
 
-  const provisionAndSubscribe = useCallback(async (firebaseUser: User) => {
+  const clearSubscriptions = useCallback(() => {
     if (unsubProfileRef.current) {
       unsubProfileRef.current();
       unsubProfileRef.current = undefined;
     }
+    if (unsubBlockRef.current) {
+      unsubBlockRef.current();
+      unsubBlockRef.current = undefined;
+    }
+    if (unsubConfigRef.current) {
+      unsubConfigRef.current();
+      unsubConfigRef.current = undefined;
+    }
+  }, []);
+
+  const provisionAndSubscribe = useCallback(async (firebaseUser: User) => {
+    clearSubscriptions();
 
     setUser(firebaseUser);
     setAuthError(null);
@@ -147,11 +167,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Firestore rules mandate email_verified == true before creating or updating records.
     if (!firebaseUser.emailVerified) {
       setProfile(null);
+      setBlockedRecord(null);
+      setPlatformConfig(null);
       setLoading(false);
       return;
     }
 
+    const adminUser = isVerifiedAdmin(firebaseUser);
+
     try {
+      // Listen for platform announcement config
+      unsubConfigRef.current = onSnapshot(
+        doc(db, 'appConfig', 'platform'),
+        (snap) => {
+          if (snap.exists()) {
+            setPlatformConfig(snap.data() as PlatformConfigRecord);
+          } else {
+            setPlatformConfig(null);
+          }
+        },
+        () => {
+          setPlatformConfig(null);
+        }
+      );
+
+      // Check and subscribe to block status for non-admin users
+      if (!adminUser) {
+        const blockRef = doc(db, 'blockedUsers', firebaseUser.uid);
+        const blockSnap = await getDoc(blockRef);
+        const initialBlocked = blockSnap.exists()
+          ? ({ id: blockSnap.id, ...(blockSnap.data() as Omit<BlockedUserRecord, 'id'>) })
+          : null;
+        setBlockedRecord(initialBlocked);
+
+        unsubBlockRef.current = onSnapshot(
+          blockRef,
+          (snap) => {
+            if (snap.exists()) {
+              setBlockedRecord({ id: snap.id, ...(snap.data() as Omit<BlockedUserRecord, 'id'>) });
+            } else {
+              setBlockedRecord(null);
+            }
+          },
+          () => {
+            // Keep prior state on transient network failure
+          }
+        );
+
+        if (initialBlocked) {
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+      } else {
+        setBlockedRecord(null);
+      }
       const pending = readPendingProfile(firebaseUser.uid);
       const emailPrefixName = firebaseUser.email ? firebaseUser.email.split('@')[0] : 'University Student';
       const resolvedName = clampString(
@@ -218,18 +288,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setAuthError(err instanceof Error ? err.message : 'Unable to initialize student account.');
       setLoading(false);
     }
-  }, []);
+  }, [clearSubscriptions]);
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (unsubProfileRef.current) {
-        unsubProfileRef.current();
-        unsubProfileRef.current = undefined;
-      }
+      clearSubscriptions();
 
       if (!firebaseUser) {
         setUser(null);
         setProfile(null);
+        setBlockedRecord(null);
+        setPlatformConfig(null);
         setLoading(false);
         return;
       }
@@ -239,9 +308,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       unsubAuth();
-      if (unsubProfileRef.current) unsubProfileRef.current();
+      clearSubscriptions();
     };
-  }, [provisionAndSubscribe]);
+  }, [provisionAndSubscribe, clearSubscriptions]);
 
   const signInWithGoogle = async () => {
     setAuthError(null);
@@ -388,11 +457,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const isAdmin = isVerifiedAdmin(user);
+
   return (
     <AuthContext.Provider
       value={{
         user,
         profile,
+        isAdmin,
+        blockedRecord,
+        platformConfig,
         loading,
         authError,
         theme,

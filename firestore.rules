@@ -32,6 +32,17 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isVerified()
+        && 'email' in request.auth.token
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == 'samueloffei2006@gmail.com';
+    }
+
+    function isNotBlocked() {
+      return isSignedIn() && !exists(/databases/$(database)/documents/blockedUsers/$(request.auth.uid));
+    }
+
     function isValidStringList(arr, maxLen, maxItemLen) {
       return arr is list
         && arr.size() <= maxLen
@@ -272,54 +283,111 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidBlockedUser(data) {
+      return data.keys().hasAll(['uid', 'blockedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'reason', 'blockedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
+        && (!('reason' in data) || (data.reason is string && data.reason.size() <= 500))
+        && isValidId(data.blockedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformConfig(data) {
+      return data.keys().hasAll(['announcementTitle', 'announcementBody', 'announcementTone', 'isActive', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['announcementTitle', 'announcementBody', 'announcementTone', 'isActive', 'updatedBy', 'updatedAt'])
+        && data.announcementTitle is string && data.announcementTitle.size() <= 120
+        && data.announcementBody is string && data.announcementBody.size() <= 500
+        && data.announcementTone in ['info', 'warning', 'success']
+        && data.isActive is bool
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    // 0. Administrator Blocklist & Platform Config
+    match /blockedUsers/{userId} {
+      allow get: if isValidId(userId) && (isAdmin() || isOwner(userId));
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isAdmin() && userId != request.auth.uid
+        && isValidBlockedUser(incoming())
+        && incoming().uid == userId
+        && incoming().blockedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isAdmin() && userId != request.auth.uid
+        && isValidBlockedUser(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'displayName', 'reason', 'blockedBy', 'updatedAt']);
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /appConfig/{configId} {
+      allow get: if isValidId(configId) && isSignedIn();
+      allow list: if isAdmin();
+      allow create: if isValidId(configId) && isAdmin()
+        && isValidPlatformConfig(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(configId) && isAdmin()
+        && isValidPlatformConfig(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['announcementTitle', 'announcementBody', 'announcementTone', 'isActive', 'updatedBy', 'updatedAt']);
+      allow delete: if isValidId(configId) && isAdmin();
+    }
+
     // 1. Private User Account (PII)
     match /users/{userId} {
-      allow get: if isValidId(userId) && isOwner(userId);
-      allow list: if false;
-      allow create: if isValidId(userId) && isVerified() && isOwner(userId)
+      allow get: if isValidId(userId) && (isAdmin() || (isOwner(userId) && isNotBlocked()));
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isVerified() && isNotBlocked() && isOwner(userId)
         && isValidUserAccount(incoming())
         && incoming().uid == userId
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isValidId(userId) && isVerified() && isOwner(userId)
+      allow update: if isValidId(userId) && (isAdmin() || (isVerified() && isNotBlocked() && isOwner(userId)))
         && isValidUserAccount(incoming())
         && incoming().uid == existing().uid
         && incoming().email == existing().email
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']);
-      allow delete: if false;
+      allow delete: if isValidId(userId) && isAdmin() && userId != request.auth.uid;
 
       // 1a. Enrolled Courses & Progress
       match /enrollments/{enrollmentId} {
-        allow get: if isValidId(userId) && isValidId(enrollmentId) && isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
-        allow create: if isValidId(userId) && isValidId(enrollmentId) && isVerified() && isOwner(userId)
+        allow get: if isValidId(userId) && isValidId(enrollmentId) && (isAdmin() || (isNotBlocked() && isOwner(userId) && existing().ownerId == request.auth.uid));
+        allow list: if isAdmin() || (isOwner(userId) && resource.data.ownerId == request.auth.uid);
+        allow create: if isValidId(userId) && isValidId(enrollmentId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidEnrollment(incoming())
           && incoming().ownerId == userId
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/users/$(userId));
-        allow update: if isValidId(userId) && isValidId(enrollmentId) && isVerified() && isOwner(userId)
+        allow update: if isValidId(userId) && isValidId(enrollmentId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidEnrollment(incoming())
           && incoming().ownerId == existing().ownerId
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly(['courseCode', 'courseTitle', 'instructor', 'credits', 'targetGrade', 'currentScore', 'completedModules', 'totalModules', 'semester', 'updatedAt']);
-        allow delete: if isValidId(userId) && isValidId(enrollmentId) && isVerified() && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(enrollmentId) && (isAdmin() || (isVerified() && isNotBlocked() && isOwner(userId)));
       }
 
       // 1b. Personal Study Tasks
       match /tasks/{taskId} {
-        allow get: if isValidId(userId) && isValidId(taskId) && isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
-        allow create: if isValidId(userId) && isValidId(taskId) && isVerified() && isOwner(userId)
+        allow get: if isValidId(userId) && isValidId(taskId) && (isAdmin() || (isNotBlocked() && isOwner(userId) && existing().ownerId == request.auth.uid));
+        allow list: if isAdmin() || (isOwner(userId) && resource.data.ownerId == request.auth.uid);
+        allow create: if isValidId(userId) && isValidId(taskId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidStudyTask(incoming())
           && incoming().ownerId == userId
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/users/$(userId));
-        allow update: if isValidId(userId) && isValidId(taskId) && isVerified() && isOwner(userId)
+        allow update: if isValidId(userId) && isValidId(taskId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidStudyTask(incoming())
           && incoming().ownerId == existing().ownerId
           && incoming().createdAt == existing().createdAt
@@ -328,20 +396,20 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
             || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'courseCode', 'priority', 'status', 'dueDate', 'estimatedMinutes', 'notes', 'updatedAt'])
           );
-        allow delete: if isValidId(userId) && isValidId(taskId) && isVerified() && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(taskId) && (isAdmin() || (isVerified() && isNotBlocked() && isOwner(userId)));
       }
 
       // 1c. Personal Calendar Events
       match /events/{eventId} {
-        allow get: if isValidId(userId) && isValidId(eventId) && isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
-        allow create: if isValidId(userId) && isValidId(eventId) && isVerified() && isOwner(userId)
+        allow get: if isValidId(userId) && isValidId(eventId) && (isAdmin() || (isNotBlocked() && isOwner(userId) && existing().ownerId == request.auth.uid));
+        allow list: if isAdmin() || (isOwner(userId) && resource.data.ownerId == request.auth.uid);
+        allow create: if isValidId(userId) && isValidId(eventId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidCalendarEvent(incoming())
           && incoming().ownerId == userId
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/users/$(userId));
-        allow update: if isValidId(userId) && isValidId(eventId) && isVerified() && isOwner(userId)
+        allow update: if isValidId(userId) && isValidId(eventId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidCalendarEvent(incoming())
           && incoming().ownerId == existing().ownerId
           && incoming().createdAt == existing().createdAt
@@ -350,33 +418,33 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt'])
             || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'courseCode', 'eventType', 'date', 'startTime', 'location', 'description', 'completed', 'updatedAt'])
           );
-        allow delete: if isValidId(userId) && isValidId(eventId) && isVerified() && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(eventId) && (isAdmin() || (isVerified() && isNotBlocked() && isOwner(userId)));
       }
 
       // 1d. Focus & Study Logs
       match /studyLogs/{logId} {
-        allow get: if isValidId(userId) && isValidId(logId) && isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
-        allow create: if isValidId(userId) && isValidId(logId) && isVerified() && isOwner(userId)
+        allow get: if isValidId(userId) && isValidId(logId) && (isAdmin() || (isNotBlocked() && isOwner(userId) && existing().ownerId == request.auth.uid));
+        allow list: if isAdmin() || (isOwner(userId) && resource.data.ownerId == request.auth.uid);
+        allow create: if isValidId(userId) && isValidId(logId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidStudyLog(incoming())
           && incoming().ownerId == userId
           && incoming().createdAt == request.time
           && exists(/databases/$(database)/documents/users/$(userId));
         allow update: if false;
-        allow delete: if isValidId(userId) && isValidId(logId) && isVerified() && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(logId) && (isAdmin() || (isVerified() && isNotBlocked() && isOwner(userId)));
       }
 
       // 1e. Quiz Retention Attempts & Saved Quizzes
       match /quizAttempts/{attemptId} {
-        allow get: if isValidId(userId) && isValidId(attemptId) && isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
-        allow create: if isValidId(userId) && isValidId(attemptId) && isVerified() && isOwner(userId)
+        allow get: if isValidId(userId) && isValidId(attemptId) && (isAdmin() || (isNotBlocked() && isOwner(userId) && existing().ownerId == request.auth.uid));
+        allow list: if isAdmin() || (isOwner(userId) && resource.data.ownerId == request.auth.uid);
+        allow create: if isValidId(userId) && isValidId(attemptId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidQuizAttempt(incoming())
           && incoming().ownerId == userId
           && incoming().createdAt == request.time
           && (!('updatedAt' in incoming()) || incoming().updatedAt == request.time)
           && exists(/databases/$(database)/documents/users/$(userId));
-        allow update: if isValidId(userId) && isValidId(attemptId) && isVerified() && isOwner(userId)
+        allow update: if isValidId(userId) && isValidId(attemptId) && isVerified() && isNotBlocked() && isOwner(userId)
           && isValidQuizAttempt(incoming())
           && incoming().ownerId == existing().ownerId
           && incoming().title == existing().title
@@ -384,116 +452,125 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly(['score', 'isGraded', 'selectedAnswers', 'updatedAt']);
-        allow delete: if isValidId(userId) && isValidId(attemptId) && isVerified() && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(attemptId) && (isAdmin() || (isVerified() && isNotBlocked() && isOwner(userId)));
       }
     }
 
     // 2. Public Student Profiles (No PII)
     match /profiles/{userId} {
-      allow get: if isValidId(userId) && isSignedIn() && (isOwner(userId) || (resource != null && existing().isPublic == true));
-      allow list: if isSignedIn() && (resource.data.isPublic == true || resource.data.uid == request.auth.uid);
-      allow create: if isValidId(userId) && isVerified() && isOwner(userId)
+      allow get: if isValidId(userId) && isSignedIn() && (isAdmin() || (isNotBlocked() && (isOwner(userId) || (resource != null && existing().isPublic == true))));
+      allow list: if isAdmin() || (isSignedIn() && (resource.data.isPublic == true || resource.data.uid == request.auth.uid));
+      allow create: if isValidId(userId) && isVerified() && isNotBlocked() && isOwner(userId)
         && isValidStudentProfile(incoming())
         && incoming().uid == userId
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isValidId(userId) && isVerified() && isOwner(userId)
+      allow update: if isValidId(userId) && (isAdmin() || (isVerified() && isNotBlocked() && isOwner(userId)))
         && isValidStudentProfile(incoming())
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'university', 'program', 'yearOfStudy', 'bio', 'courses', 'studyInterests', 'photoURL', 'isPublic', 'updatedAt']);
-      allow delete: if isValidId(userId) && isVerified() && isOwner(userId);
+      allow delete: if isValidId(userId) && (isAdmin() || (isVerified() && isNotBlocked() && isOwner(userId)));
     }
 
     // 3. Shared Past Questions Bank
     match /pastQuestions/{questionId} {
-      allow get: if isValidId(questionId) && isSignedIn() && (existing().isPublic == true || existing().authorId == request.auth.uid);
-      allow list: if isSignedIn() && (resource.data.isPublic == true || resource.data.authorId == request.auth.uid);
-      allow create: if isValidId(questionId) && isVerified()
+      allow get: if isValidId(questionId) && isSignedIn() && (isAdmin() || (isNotBlocked() && (existing().isPublic == true || existing().authorId == request.auth.uid)));
+      allow list: if isAdmin() || (isSignedIn() && (resource.data.isPublic == true || resource.data.authorId == request.auth.uid));
+      allow create: if isValidId(questionId) && isVerified() && isNotBlocked()
         && isValidPastQuestion(incoming())
         && incoming().authorId == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isValidId(questionId) && isVerified()
-        && existing().authorId == request.auth.uid
+      allow update: if isValidId(questionId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().authorId == request.auth.uid))
         && isValidPastQuestion(incoming())
         && incoming().authorId == existing().authorId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['courseCode', 'courseTitle', 'university', 'examYear', 'semester', 'examType', 'title', 'questionText', 'solutionText', 'fileName', 'fileMimeType', 'fileDataUrl', 'fileSizeBytes', 'fileChunkCount', 'isPublic', 'updatedAt']);
-      allow delete: if isValidId(questionId) && isVerified() && existing().authorId == request.auth.uid;
+      allow delete: if isValidId(questionId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().authorId == request.auth.uid));
 
       match /comments/{commentId} {
-        allow get: if isValidId(questionId) && isValidId(commentId) && isSignedIn()
+        allow get: if isValidId(questionId) && isValidId(commentId) && isSignedIn() && (isAdmin() || isNotBlocked())
           && exists(/databases/$(database)/documents/pastQuestions/$(questionId));
-        allow list: if isValidId(questionId) && isSignedIn();
-        allow create: if isValidId(questionId) && isValidId(commentId) && isVerified()
+        allow list: if isValidId(questionId) && (isAdmin() || isSignedIn());
+        allow create: if isValidId(questionId) && isValidId(commentId) && isVerified() && isNotBlocked()
           && isValidPastQuestionComment(incoming())
           && incoming().authorId == request.auth.uid
           && incoming().createdAt == request.time
           && exists(/databases/$(database)/documents/pastQuestions/$(questionId));
         allow update: if false;
-        allow delete: if isValidId(questionId) && isValidId(commentId) && isVerified() && existing().authorId == request.auth.uid;
+        allow delete: if isValidId(questionId) && isValidId(commentId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().authorId == request.auth.uid));
       }
 
       match /fileChunks/{chunkId} {
         allow get: if isValidId(questionId) && isValidId(chunkId) && isSignedIn()
-          && (get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.isPublic == true
-              || get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.authorId == request.auth.uid);
-        allow list: if isSignedIn() && (resource.data.isReadablePublicly == true || resource.data.authorId == request.auth.uid);
-        allow create: if isValidId(questionId) && isValidId(chunkId) && isVerified()
+          && (isAdmin() || (isNotBlocked() && (get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.isPublic == true
+              || get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.authorId == request.auth.uid)));
+        allow list: if isAdmin() || (isSignedIn() && (resource.data.isReadablePublicly == true || resource.data.authorId == request.auth.uid));
+        allow create: if isValidId(questionId) && isValidId(chunkId) && isVerified() && isNotBlocked()
           && isValidFileChunk(incoming())
           && incoming().authorId == request.auth.uid
           && get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.authorId == request.auth.uid
           && incoming().isReadablePublicly == get(/databases/$(database)/documents/pastQuestions/$(questionId)).data.isPublic;
-        allow update: if false;
-        allow delete: if isValidId(questionId) && isValidId(chunkId) && isVerified() && existing().authorId == request.auth.uid;
+        allow update: if isValidId(questionId) && isValidId(chunkId) && isAdmin()
+          && isValidFileChunk(incoming())
+          && incoming().authorId == existing().authorId
+          && incoming().chunkIndex == existing().chunkIndex
+          && incoming().data == existing().data
+          && incoming().diff(existing()).affectedKeys().hasOnly(['isReadablePublicly']);
+        allow delete: if isValidId(questionId) && isValidId(chunkId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().authorId == request.auth.uid));
       }
     }
 
     // 4. Shared Study Materials Library
     match /studyMaterials/{materialId} {
-      allow get: if isValidId(materialId) && isSignedIn() && (existing().visibility in ['course', 'public'] || existing().authorId == request.auth.uid);
-      allow list: if isSignedIn() && (resource.data.visibility in ['course', 'public'] || resource.data.authorId == request.auth.uid);
-      allow create: if isValidId(materialId) && isVerified()
+      allow get: if isValidId(materialId) && isSignedIn() && (isAdmin() || (isNotBlocked() && (existing().visibility in ['course', 'public'] || existing().authorId == request.auth.uid)));
+      allow list: if isAdmin() || (isSignedIn() && (resource.data.visibility in ['course', 'public'] || resource.data.authorId == request.auth.uid));
+      allow create: if isValidId(materialId) && isVerified() && isNotBlocked()
         && isValidStudyMaterial(incoming())
         && incoming().authorId == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isValidId(materialId) && isVerified()
-        && existing().authorId == request.auth.uid
+      allow update: if isValidId(materialId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().authorId == request.auth.uid))
         && isValidStudyMaterial(incoming())
         && incoming().authorId == existing().authorId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
           incoming().diff(existing()).affectedKeys().hasOnly(['aiSummary', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['visibility', 'updatedAt'])
           || incoming().diff(existing()).affectedKeys().hasOnly(['courseCode', 'courseTitle', 'materialType', 'title', 'description', 'contentText', 'aiSummary', 'fileName', 'fileMimeType', 'fileDataUrl', 'fileSizeBytes', 'fileChunkCount', 'externalUrl', 'visibility', 'updatedAt'])
         );
-      allow delete: if isValidId(materialId) && isVerified() && existing().authorId == request.auth.uid;
+      allow delete: if isValidId(materialId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().authorId == request.auth.uid));
 
       match /fileChunks/{chunkId} {
         allow get: if isValidId(materialId) && isValidId(chunkId) && isSignedIn()
-          && (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']
-              || get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid);
-        allow list: if isSignedIn() && (resource.data.isReadablePublicly == true || resource.data.authorId == request.auth.uid);
-        allow create: if isValidId(materialId) && isValidId(chunkId) && isVerified()
+          && (isAdmin() || (isNotBlocked() && (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']
+              || get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid)));
+        allow list: if isAdmin() || (isSignedIn() && (resource.data.isReadablePublicly == true || resource.data.authorId == request.auth.uid));
+        allow create: if isValidId(materialId) && isValidId(chunkId) && isVerified() && isNotBlocked()
           && isValidFileChunk(incoming())
           && incoming().authorId == request.auth.uid
           && get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid
           && incoming().isReadablePublicly == (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']);
-        allow update: if false;
-        allow delete: if isValidId(materialId) && isValidId(chunkId) && isVerified() && existing().authorId == request.auth.uid;
+        allow update: if isValidId(materialId) && isValidId(chunkId) && isAdmin()
+          && isValidFileChunk(incoming())
+          && incoming().authorId == existing().authorId
+          && incoming().chunkIndex == existing().chunkIndex
+          && incoming().data == existing().data
+          && incoming().diff(existing()).affectedKeys().hasOnly(['isReadablePublicly']);
+        allow delete: if isValidId(materialId) && isValidId(chunkId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().authorId == request.auth.uid));
       }
 
       match /annotations/{annotationId} {
         allow get: if isValidId(materialId) && isValidId(annotationId) && isSignedIn()
-          && existing().authorId == request.auth.uid
-          && (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']
-              || get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid);
-        allow list: if isSignedIn() && resource.data.authorId == request.auth.uid;
-        allow create: if isValidId(materialId) && isValidId(annotationId) && isVerified()
+          && (isAdmin() || (isNotBlocked() && existing().authorId == request.auth.uid
+              && (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']
+                  || get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid)));
+        allow list: if isAdmin() || (isSignedIn() && resource.data.authorId == request.auth.uid);
+        allow create: if isValidId(materialId) && isValidId(annotationId) && isVerified() && isNotBlocked()
           && isValidMaterialAnnotation(incoming())
           && incoming().authorId == request.auth.uid
           && incoming().materialId == materialId
@@ -501,7 +578,7 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && (get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.visibility in ['course', 'public']
               || get(/databases/$(database)/documents/studyMaterials/$(materialId)).data.authorId == request.auth.uid);
-        allow update: if isValidId(materialId) && isValidId(annotationId) && isVerified()
+        allow update: if isValidId(materialId) && isValidId(annotationId) && isVerified() && isNotBlocked()
           && existing().authorId == request.auth.uid
           && isValidMaterialAnnotation(incoming())
           && incoming().authorId == existing().authorId
@@ -511,41 +588,40 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly(['noteText', 'color', 'x', 'y', 'updatedAt']);
-        allow delete: if isValidId(materialId) && isValidId(annotationId) && isVerified() && existing().authorId == request.auth.uid;
+        allow delete: if isValidId(materialId) && isValidId(annotationId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().authorId == request.auth.uid));
       }
     }
 
     // 5. Peer-to-Peer Student Conversations
     match /conversations/{conversationId} {
-      allow get: if isValidId(conversationId) && isSignedIn() && (resource == null || request.auth.uid in existing().participantIds);
-      allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
-      allow create: if isValidId(conversationId) && isVerified()
+      allow get: if isValidId(conversationId) && isSignedIn() && (isAdmin() || (isNotBlocked() && (resource == null || request.auth.uid in existing().participantIds)));
+      allow list: if isAdmin() || (isSignedIn() && request.auth.uid in resource.data.participantIds);
+      allow create: if isValidId(conversationId) && isVerified() && isNotBlocked()
         && isValidConversation(incoming())
         && request.auth.uid in incoming().participantIds
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isValidId(conversationId) && isVerified()
-        && request.auth.uid in existing().participantIds
+      allow update: if isValidId(conversationId) && (isAdmin() || (isVerified() && isNotBlocked() && request.auth.uid in existing().participantIds))
         && isValidConversation(incoming())
         && incoming().participantIds == existing().participantIds
         && incoming().participantNames == existing().participantNames
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessage', 'updatedAt']);
-      allow delete: if false;
+      allow delete: if isValidId(conversationId) && isAdmin();
 
       match /messages/{messageId} {
         allow get: if isValidId(conversationId) && isValidId(messageId) && isSignedIn()
-          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds;
-        allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
-        allow create: if isValidId(conversationId) && isValidId(messageId) && isVerified()
+          && (isAdmin() || (isNotBlocked() && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds));
+        allow list: if isAdmin() || (isSignedIn() && request.auth.uid in resource.data.participantIds);
+        allow create: if isValidId(conversationId) && isValidId(messageId) && isVerified() && isNotBlocked()
           && isValidChatMessage(incoming())
           && incoming().senderId == request.auth.uid
           && incoming().createdAt == request.time
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds
           && incoming().participantIds == get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds;
         allow update: if false;
-        allow delete: if isValidId(conversationId) && isValidId(messageId) && isVerified() && existing().senderId == request.auth.uid;
+        allow delete: if isValidId(conversationId) && isValidId(messageId) && (isAdmin() || (isVerified() && isNotBlocked() && existing().senderId == request.auth.uid));
       }
     }
   }

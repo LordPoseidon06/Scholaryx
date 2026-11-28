@@ -9,17 +9,18 @@
 
 6. **Chunked Attachment Integrity**: Large file attachments stored in `/pastQuestions/{questionId}/fileChunks/{chunkId}` and `/studyMaterials/{materialId}/fileChunks/{chunkId}` verify parent authorship via `get()` on create, bind `isReadablePublicly` strictly to parent visibility, cap chunk payload at 650,000 chars and `chunkIndex <= 250` (supporting up to 100 MB attachments), and enforce query-level filtering on `allow list` without `get()`.
 7. **PDF Annotations Isolation**: Personal highlights and sticky notes stored under `/studyMaterials/{materialId}/annotations/{annotationId}` validate parent readability on `create`/`get`, restrict `list` via `resource.data.authorId == request.auth.uid`, bound `rects` arrays (`<= 80`) and text lengths (`<= 2000`), and limit `update`/`delete` strictly to the annotation author.
+8. **Exclusive Admin RBAC & User Blocking**: Administrator privileges (`isAdmin()`) are strictly bound to a verified email token matching `samueloffei2006@gmail.com` (case-insensitive, `email_verified == true`). Non-admin users cannot list `/users`, write `/blockedUsers`, write `/appConfig`, or delete/moderate another user's records. Users listed in `/blockedUsers/{uid}` are denied `get`, `create`, `update`, and `delete` operations across workspace collections and prevented from self-escalation; the admin cannot block or delete their own account.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads
 1. **PII Snooping (`GET /users/victim_uid`)**: Signed-in non-owner tries to read another student's `/users/{uid}` document -> `PERMISSION_DENIED`.
 2. **Author Spoofing (`CREATE /pastQuestions/pq1`)**: Authenticated user sets `authorId: "someone_else"` -> `PERMISSION_DENIED`.
 3. **Shadow Field Injection (`CREATE /studyMaterials/m1`)**: Payload includes extra ghost field `isOfficial: true` -> `PERMISSION_DENIED` (`keys().hasOnly(...)` fails).
 4. **Timestamp Forgery (`CREATE /users/{uid}/tasks/t1`)**: Client submits backdated `createdAt` instead of `request.time` -> `PERMISSION_DENIED`.
-5. **Unverified Account Write (`CREATE /pastQuestions/pq2`)**: Token with `email_verified: false` attempts write -> `PERMISSION_DENIED`.
+5. **Unverified Admin Email Spoof (`LIST /users` or `CREATE /blockedUsers/victim`)**: Token claims `email: "samueloffei2006@gmail.com"` with `email_verified: false` -> `PERMISSION_DENIED`.
 6. **ID Poisoning (`CREATE /studyMaterials/<1500-char-id>`)**: Oversized or special-character document ID -> `PERMISSION_DENIED` (`isValidId` fails).
 7. **Resource Exhaustion / Denial of Wallet (`CREATE /studyMaterials/m2`)**: `contentText` > 60,000 chars, `fileDataUrl` > 700,000 chars, or `fileChunkCount` > 250 -> `PERMISSION_DENIED`.
 8. **Cross-Owner Subcollection Write (`CREATE /users/victim_uid/tasks/t2`)**: Attacker sets `ownerId: attacker_uid` inside victim's subcollection -> `PERMISSION_DENIED`.
 9. **Chat Hijack (`CREATE /conversations/c1/messages/msg1`)**: Non-participant attempts to send message or spoof `participantIds` -> `PERMISSION_DENIED` (parent `get()` check fails).
 10. **Private Material Leak (`GET /studyMaterials/private1` or `LIST /studyMaterials/private1/fileChunks`)**: Non-author reads private material or its `fileChunks` with `isReadablePublicly: false` -> `PERMISSION_DENIED`.
-11. **Immutable Field Mutation (`UPDATE /pastQuestions/pq1`)**: Author attempts to change `authorId` or `createdAt` -> `PERMISSION_DENIED`.
-12. **Unbounded Array Injection (`UPDATE /profiles/{uid}`)**: Student passes 50 course codes in `courses` array -> `PERMISSION_DENIED` (`courses.size() <= 15`).
+11. **Blocked User Mutation (`CREATE /studyMaterials/m3` or `UPDATE /profiles/{blocked_uid}`)**: User present in `/blockedUsers/{uid}` attempts to post, message, or edit profile -> `PERMISSION_DENIED` (`isNotBlocked()` fails).
+12. **Privilege Escalation (`CREATE /blockedUsers/victim` or `UPDATE /appConfig/platform` by non-admin)**: Regular student attempts to block peers or modify platform announcements -> `PERMISSION_DENIED`.

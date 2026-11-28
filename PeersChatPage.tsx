@@ -475,7 +475,7 @@ export function PeersChatPage({
   return (
     <div className="space-y-4">
       {/* Messenger Shell (WhatsApp-style two-pane on desktop, full-screen DM drill-down on mobile) */}
-      <div className="flex h-[calc(100vh-8.75rem)] min-h-[560px] overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex h-[calc(100dvh-7.5rem)] min-h-[460px] overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         {/* Left Pane: Chats & Classmates Directory */}
         <aside
           className={`${
@@ -920,7 +920,7 @@ export function PeersChatPage({
                               type="button"
                               onClick={() => void handleDeleteMessage(msg.id)}
                               disabled={deletingMsgId === msg.id}
-                              className="mb-1 rounded-md p-1 text-slate-400 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 focus:opacity-100 dark:hover:bg-red-950/50 dark:hover:text-red-400"
+                              className="mb-1 rounded-md p-1.5 text-slate-400 opacity-60 transition-opacity hover:bg-red-50 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 dark:hover:bg-red-950/50 dark:hover:text-red-400"
                               title="Delete message"
                               aria-label="Delete message"
                             >

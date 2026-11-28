@@ -9,19 +9,23 @@ import {
   LibraryBig,
   ListChecks,
   LogOut,
+  Megaphone,
   Menu,
   MessagesSquare,
   Moon,
+  ShieldCheck,
   Sun,
   WandSparkles,
   X,
 } from 'lucide-react';
 import { ScholaryxLogo } from './components/BrandLogo';
+import { BlockedAccountGate } from './components/BlockedAccountGate';
 import { EmailVerificationGate } from './components/EmailVerificationGate';
 import { EASE_OUT_EXPO, PageTransition } from './components/MotionPrimitives';
 import { UserAvatar } from './components/UserAvatar';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AIStudyStudioPage } from './pages/AIStudyStudioPage';
+import { AdminPage } from './pages/AdminPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { LandingAuth } from './pages/LandingAuth';
 import { OverviewPage } from './pages/OverviewPage';
@@ -164,6 +168,15 @@ const NAV_ITEMS: NavItemConfig[] = [
     activeRowBg: 'bg-slate-100 ring-slate-300/80 dark:bg-slate-800/90 dark:ring-slate-700',
     activeText: 'text-slate-900 dark:text-slate-100',
   },
+  {
+    id: 'admin',
+    label: 'Admin Control',
+    icon: ShieldCheck,
+    activeGradient: 'from-rose-600 to-indigo-700',
+    idleTint: 'text-rose-600 dark:text-rose-400',
+    activeRowBg: 'bg-rose-50/90 ring-rose-200/80 dark:bg-rose-950/45 dark:ring-rose-800/60',
+    activeText: 'text-rose-800 dark:text-rose-300',
+  },
 ];
 
 const VALID_SECTIONS = new Set<NavSection>(NAV_ITEMS.map((item) => item.id));
@@ -232,7 +245,7 @@ function isWorkspaceRouteState(val: unknown): val is WorkspaceRouteState {
 }
 
 function WorkspaceShell() {
-  const { user, profile, loading, logout, theme, toggleTheme } = useAuth();
+  const { user, profile, isAdmin, blockedRecord, platformConfig, loading, logout, theme, toggleTheme } = useAuth();
   const [initialRoute] = useState<WorkspaceRouteState>(parseRouteFromLocation);
   const [section, setSection] = useState<NavSection>(initialRoute.section);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -241,13 +254,19 @@ function WorkspaceShell() {
   const [targetQuestionId, setTargetQuestionId] = useState<string | null>(initialRoute.questionId);
   const [targetPeerUid, setTargetPeerUid] = useState<string | null>(initialRoute.peerUid);
 
-  const applyRouteState = useCallback((next: WorkspaceRouteState) => {
-    setSection(next.section);
-    setTargetPeerUid(next.peerUid);
-    setTargetMaterialId(next.materialId);
-    setTargetQuestionId(next.questionId);
-    setMobileOpen(false);
-  }, []);
+  const visibleNavItems = NAV_ITEMS.filter((item) => item.id !== 'admin' || isAdmin);
+
+  const applyRouteState = useCallback(
+    (next: WorkspaceRouteState) => {
+      const resolvedSection = next.section === 'admin' && !isAdmin ? 'overview' : next.section;
+      setSection(resolvedSection);
+      setTargetPeerUid(resolvedSection === 'peers' ? next.peerUid : null);
+      setTargetMaterialId(resolvedSection === 'materials' ? next.materialId : null);
+      setTargetQuestionId(resolvedSection === 'past-questions' ? next.questionId : null);
+      setMobileOpen(false);
+    },
+    [isAdmin]
+  );
 
   const navigateTo = useCallback(
     (
@@ -259,11 +278,12 @@ function WorkspaceShell() {
         replace?: boolean;
       }
     ) => {
+      const resolvedSection = nextSection === 'admin' && !isAdmin ? 'overview' : nextSection;
       const nextState: WorkspaceRouteState = {
-        section: nextSection,
-        peerUid: nextSection === 'peers' ? (opts?.peerUid ?? null) : null,
-        materialId: nextSection === 'materials' ? (opts?.materialId ?? null) : null,
-        questionId: nextSection === 'past-questions' ? (opts?.questionId ?? null) : null,
+        section: resolvedSection,
+        peerUid: resolvedSection === 'peers' ? (opts?.peerUid ?? null) : null,
+        materialId: resolvedSection === 'materials' ? (opts?.materialId ?? null) : null,
+        questionId: resolvedSection === 'past-questions' ? (opts?.questionId ?? null) : null,
       };
 
       const isSame =
@@ -283,8 +303,14 @@ function WorkspaceShell() {
         }
       }
     },
-    [section, targetPeerUid, targetMaterialId, targetQuestionId, applyRouteState]
+    [section, targetPeerUid, targetMaterialId, targetQuestionId, applyRouteState, isAdmin]
   );
+
+  useEffect(() => {
+    if (!loading && section === 'admin' && !isAdmin) {
+      navigateTo('overview', { replace: true });
+    }
+  }, [loading, section, isAdmin, navigateTo]);
 
   // Clean ?resource query param on boot & ensure initial history entry has state
   useEffect(() => {
@@ -338,6 +364,10 @@ function WorkspaceShell() {
     return <EmailVerificationGate />;
   }
 
+  if (blockedRecord && !isAdmin) {
+    return <BlockedAccountGate />;
+  }
+
   const handleSendToAIStudio = (prefill: StudioPrefill) => {
     setStudioPrefill(prefill);
     navigateTo('ai-studio');
@@ -355,7 +385,7 @@ function WorkspaceShell() {
     }
   };
 
-  const activeNav = NAV_ITEMS.find((n) => n.id === section) || NAV_ITEMS[0];
+  const activeNav = visibleNavItems.find((n) => n.id === section) || visibleNavItems[0];
   const ActiveNavIcon = activeNav.icon;
 
   const renderSection = () => {
@@ -416,6 +446,8 @@ function WorkspaceShell() {
         );
       case 'profile':
         return <ProfilePage />;
+      case 'admin':
+        return isAdmin ? <AdminPage /> : <OverviewPage onNavigate={(s) => navigateTo(s)} />;
       default:
         return <OverviewPage onNavigate={(s) => navigateTo(s)} />;
     }
@@ -432,7 +464,7 @@ function WorkspaceShell() {
         </div>
 
         <nav className="space-y-1 px-3 py-4" aria-label="Workspace Navigation">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = section === item.id;
             return (
@@ -547,7 +579,7 @@ function WorkspaceShell() {
 
       {/* Main Content Viewport */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-slate-200/80 bg-white/85 px-4 py-3 backdrop-blur-md sm:px-6 dark:border-slate-800/80 dark:bg-slate-900/85">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-slate-200/80 bg-white/85 px-4 py-2.5 lg:py-3 backdrop-blur-md sm:px-6 dark:border-slate-800/80 dark:bg-slate-900/85">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -573,6 +605,17 @@ function WorkspaceShell() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2.5">
+            {isAdmin && section !== 'admin' && (
+              <button
+                type="button"
+                onClick={() => navigateTo('admin')}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-100 whitespace-nowrap dark:border-rose-800 dark:bg-rose-950/50 dark:text-rose-300 dark:hover:bg-rose-900/50"
+              >
+                <ShieldCheck className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
+                <span className="hidden sm:inline">Admin</span>
+              </button>
+            )}
+
             {section !== 'peers' && (
               <button
                 type="button"
@@ -600,11 +643,74 @@ function WorkspaceShell() {
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
+        <main
+          className={`mx-auto w-full max-w-6xl flex-1 px-4 py-5 sm:px-6 sm:py-8 ${
+            !(section === 'peers' && Boolean(targetPeerUid)) ? 'pb-16 lg:pb-8' : ''
+          }`}
+        >
+          {platformConfig?.isActive &&
+            (platformConfig.announcementTitle || platformConfig.announcementBody) && (
+              <div
+                className={`mb-5 flex items-start gap-3 rounded-xl border px-4 py-3 text-xs ${
+                  platformConfig.announcementTone === 'warning'
+                    ? 'border-amber-200 bg-amber-50/90 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-200'
+                    : platformConfig.announcementTone === 'success'
+                    ? 'border-emerald-200 bg-emerald-50/90 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/35 dark:text-emerald-200'
+                    : 'border-indigo-200 bg-indigo-50/90 text-indigo-900 dark:border-indigo-900/60 dark:bg-indigo-950/35 dark:text-indigo-200'
+                }`}
+              >
+                <Megaphone className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  {platformConfig.announcementTitle && (
+                    <p className="font-display text-xs font-bold">{platformConfig.announcementTitle}</p>
+                  )}
+                  {platformConfig.announcementBody && (
+                    <p className="mt-0.5 leading-relaxed opacity-90">{platformConfig.announcementBody}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
           <PageTransition sectionKey={section}>
             {renderSection()}
           </PageTransition>
         </main>
+
+        {/* Compact Mobile Bottom Quick-Nav (hidden inside active DM conversations to preserve message composer space) */}
+        {!(section === 'peers' && Boolean(targetPeerUid)) && (
+          <nav
+            aria-label="Mobile Quick Navigation"
+            className="fixed inset-x-0 bottom-0 z-30 flex h-12 items-center justify-around border-t border-slate-200/90 bg-white/95 px-2 backdrop-blur-md lg:hidden dark:border-slate-800/90 dark:bg-slate-900/95"
+          >
+            {(
+              [
+                { id: 'overview', label: 'Home', icon: LayoutGrid },
+                { id: 'materials', label: 'Materials', icon: LibraryBig },
+                { id: 'ai-studio', label: 'AI Studio', icon: WandSparkles },
+                { id: 'peers', label: 'Chats', icon: MessagesSquare },
+                { id: 'profile', label: 'Profile', icon: GraduationCap },
+              ] as const
+            ).map((item) => {
+              const Icon = item.icon;
+              const isActive = section === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => navigateTo(item.id)}
+                  className={`flex min-w-[56px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1 text-[10px] font-semibold transition-colors ${
+                    isActive
+                      ? 'text-indigo-600 dark:text-indigo-400'
+                      : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span className="whitespace-nowrap">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        )}
       </div>
     </div>
   );
