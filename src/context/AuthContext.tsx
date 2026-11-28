@@ -10,11 +10,23 @@ import {
   updateProfile,
   type User,
 } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
-import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
+import { doc, getDoc, getDocFromCache, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import {
+  auth,
+  clearQuotaExceeded,
+  db,
+  googleProvider,
+  handleFirestoreError,
+  handleSnapshotError,
+  isFirestoreQuotaError,
+  notifyQuotaExceeded,
+  OperationType,
+  subscribeQuotaExceeded,
+} from '../lib/firebase';
+import { isVerifiedAdmin } from '../lib/admin';
 import { isSafeAvatarUrl, MAX_PHOTO_URL_LENGTH } from '../lib/avatar';
 import { clampString } from '../lib/utils';
-import type { StudentProfile } from '../types';
+import type { BlockedUserRecord, PlatformConfigRecord, StudentProfile } from '../types';
 
 export interface SignUpWithEmailPayload {
   displayName: string;
@@ -35,6 +47,11 @@ interface PendingProfileDetails {
 interface AuthContextValue {
   user: User | null;
   profile: StudentProfile | null;
+  isAdmin: boolean;
+  blockedRecord: BlockedUserRecord | null;
+  platformConfig: PlatformConfigRecord | null;
+  quotaExceeded: boolean;
+  dismissQuotaExceeded: () => void;
   loading: boolean;
   authError: string | null;
   theme: 'light' | 'dark';
@@ -113,6 +130,9 @@ function clearPendingProfile(uid: string): void {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<StudentProfile | null>(null);
+  const [blockedRecord, setBlockedRecord] = useState<BlockedUserRecord | null>(null);
+  const [platformConfig, setPlatformConfig] = useState<PlatformConfigRecord | null>(null);
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -121,6 +141,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   const unsubProfileRef = useRef<(() => void) | undefined>(undefined);
+  const unsubBlockRef = useRef<(() => void) | undefined>(undefined);
+  const unsubConfigRef = useRef<(() => void) | undefined>(undefined);
+
+  useEffect(() => subscribeQuotaExceeded(setQuotaExceeded), []);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -135,11 +159,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthError(null);
   }, []);
 
-  const provisionAndSubscribe = useCallback(async (firebaseUser: User) => {
+  const dismissQuotaExceeded = useCallback(() => {
+    clearQuotaExceeded();
+  }, []);
+
+  const clearSubscriptions = useCallback(() => {
     if (unsubProfileRef.current) {
       unsubProfileRef.current();
       unsubProfileRef.current = undefined;
     }
+    if (unsubBlockRef.current) {
+      unsubBlockRef.current();
+      unsubBlockRef.current = undefined;
+    }
+    if (unsubConfigRef.current) {
+      unsubConfigRef.current();
+      unsubConfigRef.current = undefined;
+    }
+  }, []);
+
+  const provisionAndSubscribe = useCallback(async (firebaseUser: User) => {
+    clearSubscriptions();
 
     setUser(firebaseUser);
     setAuthError(null);
@@ -147,11 +187,69 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Firestore rules mandate email_verified == true before creating or updating records.
     if (!firebaseUser.emailVerified) {
       setProfile(null);
+      setBlockedRecord(null);
+      setPlatformConfig(null);
       setLoading(false);
       return;
     }
 
+    const adminUser = isVerifiedAdmin(firebaseUser);
+
     try {
+      // Listen for platform announcement config
+      unsubConfigRef.current = onSnapshot(
+        doc(db, 'appConfig', 'platform'),
+        (snap) => {
+          if (snap.exists()) {
+            setPlatformConfig(snap.data() as PlatformConfigRecord);
+          } else {
+            setPlatformConfig(null);
+          }
+        },
+        () => {
+          setPlatformConfig(null);
+        }
+      );
+
+      // Subscribe to block status for non-admin users without issuing a duplicate getDoc
+      if (!adminUser) {
+        const blockRef = doc(db, 'blockedUsers', firebaseUser.uid);
+        let cachedBlocked = false;
+        try {
+          const cachedSnap = await getDocFromCache(blockRef);
+          if (cachedSnap.exists()) {
+            cachedBlocked = true;
+            setBlockedRecord({ id: cachedSnap.id, ...(cachedSnap.data() as Omit<BlockedUserRecord, 'id'>) });
+          }
+        } catch {
+          // Not in cache yet
+        }
+
+        unsubBlockRef.current = onSnapshot(
+          blockRef,
+          (snap) => {
+            if (snap.exists()) {
+              setBlockedRecord({ id: snap.id, ...(snap.data() as Omit<BlockedUserRecord, 'id'>) });
+            } else {
+              setBlockedRecord(null);
+            }
+          },
+          (err) => {
+            if (isFirestoreQuotaError(err)) {
+              notifyQuotaExceeded();
+            }
+          }
+        );
+
+        if (cachedBlocked) {
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+      } else {
+        setBlockedRecord(null);
+      }
+
       const pending = readPendingProfile(firebaseUser.uid);
       const emailPrefixName = firebaseUser.email ? firebaseUser.email.split('@')[0] : 'University Student';
       const resolvedName = clampString(
@@ -160,46 +258,87 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
 
       const userRef = doc(db, 'users', firebaseUser.uid);
-      const userSnap = await getDoc(userRef);
-
-      if (!userSnap.exists()) {
-        const userPayload: Record<string, unknown> = {
-          uid: firebaseUser.uid,
-          email: clampString(firebaseUser.email || 'student@university.edu', 200),
-          displayName: resolvedName,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        };
-        if (firebaseUser.photoURL && isSafeAvatarUrl(firebaseUser.photoURL)) {
-          userPayload.photoURL = clampString(firebaseUser.photoURL, MAX_PHOTO_URL_LENGTH);
-        }
-        await setDoc(userRef, userPayload);
-      }
-
       const profileRef = doc(db, 'profiles', firebaseUser.uid);
-      const profileSnap = await getDoc(profileRef);
 
-      if (!profileSnap.exists()) {
-        const profilePayload: Record<string, unknown> = {
-          uid: firebaseUser.uid,
-          displayName: resolvedName,
-          university: clampString(pending?.university || 'State University', 150) || 'State University',
-          program: clampString(pending?.program || 'Undergraduate Studies', 150) || 'Undergraduate Studies',
-          yearOfStudy: clampString(pending?.yearOfStudy || 'Year 1', 40) || 'Year 1',
-          bio: '',
-          courses: [],
-          studyInterests: [],
-          isPublic: true,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        };
-        if (firebaseUser.photoURL && isSafeAvatarUrl(firebaseUser.photoURL)) {
-          profilePayload.photoURL = clampString(firebaseUser.photoURL, MAX_PHOTO_URL_LENGTH);
+      try {
+        let userExists = false;
+        try {
+          const cachedUser = await getDocFromCache(userRef);
+          userExists = cachedUser.exists();
+        } catch {
+          // Not in cache
         }
-        await setDoc(profileRef, profilePayload);
-      }
 
-      clearPendingProfile(firebaseUser.uid);
+        if (!userExists) {
+          const userSnap = await getDoc(userRef);
+          if (!userSnap.exists()) {
+            const userPayload: Record<string, unknown> = {
+              uid: firebaseUser.uid,
+              email: clampString(firebaseUser.email || 'student@university.edu', 200),
+              displayName: resolvedName,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            };
+            if (firebaseUser.photoURL && isSafeAvatarUrl(firebaseUser.photoURL)) {
+              userPayload.photoURL = clampString(firebaseUser.photoURL, MAX_PHOTO_URL_LENGTH);
+            }
+            await setDoc(userRef, userPayload);
+          }
+        }
+
+        let profileExists = false;
+        try {
+          const cachedProfile = await getDocFromCache(profileRef);
+          if (cachedProfile.exists()) {
+            profileExists = true;
+            setProfile(cachedProfile.data() as StudentProfile);
+          }
+        } catch {
+          // Not in cache
+        }
+
+        if (!profileExists) {
+          const profileSnap = await getDoc(profileRef);
+          if (!profileSnap.exists()) {
+            const profilePayload: Record<string, unknown> = {
+              uid: firebaseUser.uid,
+              displayName: resolvedName,
+              university: clampString(pending?.university || 'State University', 150) || 'State University',
+              program: clampString(pending?.program || 'Undergraduate Studies', 150) || 'Undergraduate Studies',
+              yearOfStudy: clampString(pending?.yearOfStudy || 'Year 1', 40) || 'Year 1',
+              bio: '',
+              courses: [],
+              studyInterests: [],
+              isPublic: true,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            };
+            if (firebaseUser.photoURL && isSafeAvatarUrl(firebaseUser.photoURL)) {
+              profilePayload.photoURL = clampString(firebaseUser.photoURL, MAX_PHOTO_URL_LENGTH);
+            }
+            await setDoc(profileRef, profilePayload);
+          } else {
+            setProfile(profileSnap.data() as StudentProfile);
+          }
+        }
+
+        clearPendingProfile(firebaseUser.uid);
+      } catch (provisionErr) {
+        if (isFirestoreQuotaError(provisionErr)) {
+          notifyQuotaExceeded();
+          try {
+            const fallbackProfile = await getDocFromCache(profileRef);
+            if (fallbackProfile.exists()) {
+              setProfile(fallbackProfile.data() as StudentProfile);
+            }
+          } catch {
+            // No cached profile available
+          }
+          setLoading(false);
+          return;
+        }
+        throw provisionErr;
+      }
 
       unsubProfileRef.current = onSnapshot(
         profileRef,
@@ -210,26 +349,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setLoading(false);
         },
         (err) => {
-          handleFirestoreError(err, OperationType.GET, `profiles/${firebaseUser.uid}`);
+          setLoading(false);
+          handleSnapshotError(err, OperationType.GET, `profiles/${firebaseUser.uid}`);
         }
       );
     } catch (err) {
+      if (isFirestoreQuotaError(err)) {
+        notifyQuotaExceeded();
+        setLoading(false);
+        return;
+      }
       console.error('Auth provisioning error:', err);
       setAuthError(err instanceof Error ? err.message : 'Unable to initialize student account.');
       setLoading(false);
     }
-  }, []);
+  }, [clearSubscriptions]);
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (unsubProfileRef.current) {
-        unsubProfileRef.current();
-        unsubProfileRef.current = undefined;
-      }
+      clearSubscriptions();
 
       if (!firebaseUser) {
         setUser(null);
         setProfile(null);
+        setBlockedRecord(null);
+        setPlatformConfig(null);
         setLoading(false);
         return;
       }
@@ -239,9 +383,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       unsubAuth();
-      if (unsubProfileRef.current) unsubProfileRef.current();
+      clearSubscriptions();
     };
-  }, [provisionAndSubscribe]);
+  }, [provisionAndSubscribe, clearSubscriptions]);
 
   const signInWithGoogle = async () => {
     setAuthError(null);
@@ -388,11 +532,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const isAdmin = isVerifiedAdmin(user);
+
   return (
     <AuthContext.Provider
       value={{
         user,
         profile,
+        isAdmin,
+        blockedRecord,
+        platformConfig,
+        quotaExceeded,
+        dismissQuotaExceeded,
         loading,
         authError,
         theme,

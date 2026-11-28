@@ -4,7 +4,7 @@ import { CheckCircle2, Plus, Trash2, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { EASE_OUT_EXPO, ModalShell, SegmentedTabs } from '../components/MotionPrimitives';
 import { useAuth } from '../context/AuthContext';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, handleSnapshotError, OperationType } from '../lib/firebase';
 import { clampString, formatReadableDate, getTimestampMillis, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
 import type { StudyTask, TaskPriority, TaskStatus } from '../types';
 
@@ -36,7 +36,7 @@ export function TasksPage() {
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setTasks(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/tasks`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/tasks`)
     );
     return () => unsub();
   }, [user]);

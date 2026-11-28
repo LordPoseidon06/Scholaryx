@@ -16,8 +16,11 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import { ScholaryxLogo } from '../components/BrandLogo';
+import { LecturerAcknowledgement } from '../components/LecturerAcknowledgement';
 import { EASE_OUT_EXPO, SegmentedTabs } from '../components/MotionPrimitives';
+import { SearchableSelectCombobox } from '../components/SearchableSelectCombobox';
 import { useAuth } from '../context/AuthContext';
+import { GHANA_PROGRAMS, GHANA_UNIVERSITIES } from '../data/ghanaAcademics';
 
 type AuthMode = 'signup' | 'signin' | 'reset';
 
@@ -486,32 +489,26 @@ export function LandingAuth() {
 
                 {mode === 'signup' && (
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                        University (Optional)
-                      </label>
-                      <input
-                        type="text"
-                        maxLength={150}
-                        value={university}
-                        onChange={(e) => setUniversity(e.target.value)}
-                        placeholder="e.g., University of Ghana"
-                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 transition-colors focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                        Program / Major (Optional)
-                      </label>
-                      <input
-                        type="text"
-                        maxLength={150}
-                        value={program}
-                        onChange={(e) => setProgram(e.target.value)}
-                        placeholder="e.g., BSc Computer Science"
-                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 transition-colors focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                      />
-                    </div>
+                    <SearchableSelectCombobox
+                      id="signup-university"
+                      label="University (Optional)"
+                      value={university}
+                      onChange={setUniversity}
+                      options={GHANA_UNIVERSITIES}
+                      maxLength={150}
+                      allLabel="Ghanaian institutions"
+                      placeholder="Search or type university..."
+                    />
+                    <SearchableSelectCombobox
+                      id="signup-program"
+                      label="Program / Major (Optional)"
+                      value={program}
+                      onChange={setProgram}
+                      options={GHANA_PROGRAMS}
+                      maxLength={150}
+                      allLabel="degree programs"
+                      placeholder="Search or type program..."
+                    />
                   </div>
                 )}
 
@@ -615,6 +612,10 @@ export function LandingAuth() {
                 </motion.div>
               );
             })}
+          </div>
+
+          <div className="mt-10">
+            <LecturerAcknowledgement />
           </div>
         </section>
       </main>

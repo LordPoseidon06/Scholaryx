@@ -5,9 +5,9 @@ import { motion } from 'motion/react';
 import { EASE_OUT_EXPO, ModalShell } from '../components/MotionPrimitives';
 import { QuizPerformanceChart } from '../components/QuizPerformanceChart';
 import { useAuth } from '../context/AuthContext';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, handleSnapshotError, OperationType } from '../lib/firebase';
 import { downloadQuizAsHtml, downloadQuizAsMarkdown } from '../lib/quizExport';
-import { clampString, formatTimestamp, getTimestampMillis, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
+import { clampString, formatTimestamp, getGhanaAcademicStanding, getTimestampMillis, getTodayIsoDate, normalizeCourseCode } from '../lib/utils';
 import type { Enrollment, QuizAttempt, StudyLog } from '../types';
 
 interface ProgressPageProps {
@@ -56,7 +56,7 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setEnrollments(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/enrollments`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/enrollments`)
     );
 
     const unsubLogs = onSnapshot(
@@ -67,7 +67,7 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setStudyLogs(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/studyLogs`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/studyLogs`)
     );
 
     const unsubQuizzes = onSnapshot(
@@ -78,7 +78,7 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setQuizAttempts(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/quizAttempts`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/quizAttempts`)
     );
 
     return () => {
@@ -242,7 +242,17 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
             {enrollments.length > 0 ? `${weightedAverage.toFixed(1)}%` : '—'}
           </p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            Across {totalCredits} enrolled credits
+            {enrollments.length > 0 ? (
+              <>
+                <span className={`font-semibold ${getGhanaAcademicStanding(weightedAverage).toneClass}`}>
+                  {getGhanaAcademicStanding(weightedAverage).label}
+                </span>
+                {' · '}
+                {totalCredits} credits
+              </>
+            ) : (
+              'Across enrolled credits'
+            )}
           </p>
         </div>
 
@@ -471,6 +481,24 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
                 />
               </div>
             </div>
+            {profile?.courses && profile.courses.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {profile.courses.slice(0, 6).map((code) => (
+                  <button
+                    key={code}
+                    type="button"
+                    onClick={() => setLogCourse(code)}
+                    className={`rounded-md px-2 py-0.5 font-mono text-[10px] font-semibold transition-colors ${
+                      logCourse === code
+                        ? 'bg-blue-700 text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                    }`}
+                  >
+                    {code}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
@@ -785,6 +813,24 @@ export function ProgressPage({ onReviewQuiz }: ProgressPageProps) {
                   />
                 </div>
               </div>
+              {profile?.courses && profile.courses.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {profile.courses.slice(0, 6).map((code) => (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setCourseCode(code)}
+                      className={`rounded-md px-2 py-0.5 font-mono text-[10px] font-semibold transition-colors ${
+                        courseCode === code
+                          ? 'bg-blue-700 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                      }`}
+                    >
+                      {code}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">

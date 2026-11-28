@@ -26,7 +26,7 @@ import { MarkdownView } from '../components/MarkdownView';
 import { AiErrorBanner, EASE_OUT_EXPO, SegmentedTabs } from '../components/MotionPrimitives';
 import { useAuth } from '../context/AuthContext';
 import { useAiStudioQueue, type AiStudioJobResult, type AiStudioMode, type AiStudioQueueItem } from '../lib/aiQueue';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, handleSnapshotError, OperationType } from '../lib/firebase';
 import { loadAttachmentDataUrl } from '../lib/fileChunks';
 import { downloadQuizAsHtml, downloadQuizAsMarkdown } from '../lib/quizExport';
 import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
@@ -259,7 +259,7 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setMaterials(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'studyMaterials')
+      (err) => handleSnapshotError(err, OperationType.LIST, 'studyMaterials')
     );
 
     const pqQ = query(collection(db, 'pastQuestions'), where('isPublic', '==', true));
@@ -271,7 +271,7 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setPastQuestions(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'pastQuestions')
+      (err) => handleSnapshotError(err, OperationType.LIST, 'pastQuestions')
     );
 
     const quizQ = query(
@@ -286,7 +286,7 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setSavedQuizzes(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/quizAttempts`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/quizAttempts`)
     );
 
     return () => {
@@ -676,7 +676,7 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                 Course Code
@@ -688,6 +688,24 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
                 placeholder="e.g. CS301"
                 className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs text-slate-900 uppercase focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
               />
+              {profile?.courses && profile.courses.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {profile.courses.slice(0, 5).map((code) => (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setCourseCode(code)}
+                      className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-medium transition-colors ${
+                        courseCode === code
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                      }`}
+                    >
+                      {code}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
@@ -709,15 +727,17 @@ export function AIStudyStudioPage({ prefill, onClearPrefill }: AIStudyStudioPage
             </label>
             <label className="mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900">
               <Upload className="h-3.5 w-3.5 shrink-0" />
-              <span>Attach file (.pdf, .docx, .pptx, .txt, .md, image — max 100 MB)</span>
+              <span>Attach PDF, slides, doc, text, or image (max 100 MB)</span>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.md,.markdown,.csv,.json,.tex,.pdf,.docx,.pptx,image/png,image/jpeg,image/webp,image/gif"
                 onChange={handleFileUpload}
-                className="hidden"
+                className="sr-only"
               />
             </label>
+            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+              On Android &amp; Samsung phones, choose Files / Documents / Drive for PDFs, slides, or docs.
+            </p>
 
             {loadingSource && (
               <p className="mt-2 text-xs font-medium text-blue-700 dark:text-blue-400">

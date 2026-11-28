@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, where } from 'firebase/firestore';
-import { Check, Download, FileText, MessageSquare, Plus, Search, Share2, Sparkles, Trash2, Upload, UserPlus, X } from 'lucide-react';
+import { Bookmark, Check, Download, FileText, MessageSquare, Plus, Search, Share2, Sparkles, Trash2, Upload, UserPlus, X } from 'lucide-react';
+import { LecturerAcknowledgement } from '../components/LecturerAcknowledgement';
 import { MarkdownView } from '../components/MarkdownView';
 import { AiErrorBanner, ModalShell, SegmentedTabs } from '../components/MotionPrimitives';
+import { PdfAnnotator } from '../components/PdfAnnotator';
 import { ShareToPeerModal } from '../components/ShareToPeerModal';
 import { useAuth } from '../context/AuthContext';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { useBookmarks } from '../lib/bookmarks';
+import { db, handleFirestoreError, handleSnapshotError, OperationType } from '../lib/firebase';
 import { deleteFileChunks, loadAttachmentDataUrl, splitDataUrlIntoChunks, uploadFileChunks } from '../lib/fileChunks';
 import { downloadNotesAsHtml, downloadNotesAsMarkdown } from '../lib/notesExport';
-import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, parseAiResponse, readStudyFile } from '../lib/utils';
+import { clampString, formatFileSize, formatTimestamp, getTimestampMillis, isPdfAttachment, MAX_INLINE_DATA_URL_CHARS, normalizeCourseCode, parseAiResponse, readStudyFile } from '../lib/utils';
 import type { ExamTypeOption, PastQuestion, PastQuestionComment, QuizAttempt, SemesterOption } from '../types';
 
 export interface StudioPrefill {
@@ -37,10 +40,11 @@ export function PastQuestionsPage({
   onSendToAIStudio,
 }: PastQuestionsPageProps) {
   const { user, profile, updateProfileData } = useAuth();
+  const { bookmarkedQuestionIds, toggleBookmark, isBookmarked } = useBookmarks(user?.uid);
   const [questions, setQuestions] = useState<PastQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [scope, setScope] = useState<'all' | 'peers' | 'my-courses' | 'mine'>('all');
+  const [scope, setScope] = useState<'all' | 'peers' | 'my-courses' | 'saved' | 'mine'>('all');
   const [courseFilter, setCourseFilter] = useState<string>('ALL');
   const [examFilter, setExamFilter] = useState<string>('ALL');
 
@@ -96,7 +100,7 @@ export function PastQuestionsPage({
       },
       (err) => {
         setLoading(false);
-        handleFirestoreError(err, OperationType.LIST, 'pastQuestions');
+        handleSnapshotError(err, OperationType.LIST, 'pastQuestions');
       }
     );
     return () => unsub();
@@ -156,7 +160,7 @@ export function PastQuestionsPage({
       (snap) => {
         setComments(snap.docs.map((d) => ({ id: d.id, ...d.data() } as PastQuestionComment)));
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `pastQuestions/${selected.id}/comments`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `pastQuestions/${selected.id}/comments`)
     );
     return () => {
       cancelled = true;
@@ -166,6 +170,7 @@ export function PastQuestionsPage({
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     setUploadError(null);
     try {
@@ -334,6 +339,7 @@ export function PastQuestionsPage({
   const filtered = questions.filter((q) => {
     if (scope === 'mine' && q.authorId !== user?.uid) return false;
     if (scope === 'peers' && q.authorId === user?.uid) return false;
+    if (scope === 'saved' && !bookmarkedQuestionIds.includes(q.id)) return false;
     if (scope === 'my-courses' && myCourses.length > 0 && !myCourses.includes(q.courseCode)) return false;
     if (courseFilter !== 'ALL' && q.courseCode !== courseFilter) return false;
     if (examFilter !== 'ALL' && q.examType !== examFilter) return false;
@@ -356,7 +362,7 @@ export function PastQuestionsPage({
             Past Questions Repository
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Access past exam papers uploaded by students across courses, or publish your own for classmates.
+            Access past exam papers uploaded across courses, or publish your own for classmates.
           </p>
         </div>
 
@@ -370,6 +376,8 @@ export function PastQuestionsPage({
         </button>
       </div>
 
+      <LecturerAcknowledgement variant="compact" />
+
       {/* Filter Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <SegmentedTabs
@@ -378,8 +386,9 @@ export function PastQuestionsPage({
           onChange={setScope}
           options={[
             { id: 'all', label: 'All Papers' },
-            { id: 'peers', label: 'From Other Students' },
+            { id: 'peers', label: 'From Students' },
             { id: 'my-courses', label: 'My Courses' },
+            { id: 'saved', label: `Saved (${bookmarkedQuestionIds.length})` },
             { id: 'mine', label: 'My Uploads' },
           ]}
         />
@@ -483,7 +492,20 @@ export function PastQuestionsPage({
                 <span className="truncate text-xs text-slate-500 dark:text-slate-400">
                   By {pq.authorName} · {formatTimestamp(pq.createdAt)}
                 </span>
-                <div className="flex shrink-0 items-center gap-1.5">
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleBookmark('pastQuestions', pq.id)}
+                    className={`rounded-md p-1.5 transition-colors ${
+                      isBookmarked('pastQuestions', pq.id)
+                        ? 'bg-amber-50 text-amber-600 dark:bg-amber-950/50 dark:text-amber-400'
+                        : 'text-slate-400 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-100'
+                    }`}
+                    title={isBookmarked('pastQuestions', pq.id) ? 'Remove bookmark' : 'Save paper'}
+                    aria-label={isBookmarked('pastQuestions', pq.id) ? 'Remove bookmark' : 'Save paper'}
+                  >
+                    <Bookmark className={`h-3.5 w-3.5 ${isBookmarked('pastQuestions', pq.id) ? 'fill-current' : ''}`} />
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShareTarget(pq)}
@@ -641,15 +663,17 @@ export function PastQuestionsPage({
                   )}
                 </div>
                 <label className="mt-1.5 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800">
-                  <Upload className="h-4 w-4" />
-                  <span>Choose PDF, slides, doc, image, or text file (max 100 MB)</span>
+                  <Upload className="h-4 w-4 shrink-0" />
+                  <span>Choose PDF, document, image, or text file (max 100 MB)</span>
                   <input
                     type="file"
-                    accept=".txt,.md,.markdown,.csv,.json,.tex,.pdf,.ppt,.pptx,.doc,.docx,image/png,image/jpeg,image/webp,image/gif"
                     onChange={handleFileChange}
-                    className="hidden"
+                    className="sr-only"
                   />
                 </label>
+                <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  On Android &amp; Samsung phones, tap Files / Documents / Drive to pick PDFs or Word papers.
+                </p>
               </div>
 
               <div>
@@ -707,7 +731,21 @@ export function PastQuestionsPage({
       </ModalShell>
 
       {/* Selected Past Question Reader Modal */}
-      <ModalShell open={Boolean(selected)} onClose={() => setSelected(null)} maxWidthClass="max-w-3xl">
+      {(() => {
+        const isPdfDoc = Boolean(
+          selected &&
+            isPdfAttachment({
+              fileMimeType: selected.fileMimeType,
+              fileName: selected.fileName,
+              dataUrl: loadedFileDataUrl,
+            })
+        );
+        return (
+      <ModalShell
+        open={Boolean(selected)}
+        onClose={() => setSelected(null)}
+        maxWidthClass={isPdfDoc ? 'max-w-5xl' : 'max-w-3xl'}
+      >
         {selected && (
           <div className="max-h-[92vh] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4 dark:border-slate-800">
@@ -771,6 +809,19 @@ export function PastQuestionsPage({
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
               >
                 Generate Practice Quiz
+              </button>
+
+              <button
+                type="button"
+                onClick={() => toggleBookmark('pastQuestions', selected.id)}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-medium whitespace-nowrap ${
+                  isBookmarked('pastQuestions', selected.id)
+                    ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                    : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                }`}
+              >
+                <Bookmark className={`h-3.5 w-3.5 ${isBookmarked('pastQuestions', selected.id) ? 'fill-current' : ''}`} />
+                {isBookmarked('pastQuestions', selected.id) ? 'Saved' : 'Save Paper'}
               </button>
 
               <button
@@ -851,11 +902,12 @@ export function PastQuestionsPage({
                 />
               )}
 
-              {loadedFileDataUrl && selected.fileMimeType === 'application/pdf' && (
-                <iframe
-                  src={loadedFileDataUrl}
-                  title={selected.fileName || 'Past exam PDF'}
-                  className="mt-4 h-96 w-full rounded-lg border border-slate-200 dark:border-slate-800"
+              {loadedFileDataUrl && isPdfDoc && (
+                <PdfAnnotator
+                  dataUrl={loadedFileDataUrl}
+                  materialId={selected.id}
+                  fileName={selected.fileName}
+                  readOnly
                 />
               )}
             </div>
@@ -974,6 +1026,8 @@ export function PastQuestionsPage({
           </div>
         )}
       </ModalShell>
+        );
+      })()}
 
       <ShareToPeerModal
         resource={

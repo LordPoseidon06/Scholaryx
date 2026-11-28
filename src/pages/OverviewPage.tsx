@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { addDoc, collection, onSnapshot, query, serverTimestamp, where } from 'firebase/firestore';
+import { addDoc, collection, limit, onSnapshot, query, serverTimestamp, where } from 'firebase/firestore';
 import {
   ArrowRight,
   CalendarRange,
@@ -14,10 +14,11 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { LecturerAcknowledgement } from '../components/LecturerAcknowledgement';
 import { EASE_OUT_EXPO, SegmentedTabs } from '../components/MotionPrimitives';
 import { useAuth } from '../context/AuthContext';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { formatReadableDate, getDaysUntil, getTimestampMillis, getTodayIsoDate } from '../lib/utils';
+import { db, handleFirestoreError, handleSnapshotError, OperationType } from '../lib/firebase';
+import { computeStudyStreak, formatReadableDate, getDaysUntil, getTimestampMillis, getTodayIsoDate } from '../lib/utils';
 import type { CalendarEvent, Enrollment, NavSection, PastQuestion, StudyLog, StudyMaterial, StudyTask } from '../types';
 
 interface OverviewPageProps {
@@ -72,7 +73,7 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setTasks(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/tasks`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/tasks`)
     );
 
     const unsubEvents = onSnapshot(
@@ -83,7 +84,7 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
           .sort((a, b) => a.date.localeCompare(b.date));
         setEvents(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/events`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/events`)
     );
 
     const unsubEnrollments = onSnapshot(
@@ -94,7 +95,7 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setEnrollments(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/enrollments`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/enrollments`)
     );
 
     const unsubLogs = onSnapshot(
@@ -105,29 +106,29 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setStudyLogs(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/studyLogs`)
+      (err) => handleSnapshotError(err, OperationType.LIST, `users/${user.uid}/studyLogs`)
     );
 
     const unsubMaterials = onSnapshot(
-      query(collection(db, 'studyMaterials'), where('visibility', 'in', ['course', 'public'])),
+      query(collection(db, 'studyMaterials'), where('visibility', 'in', ['course', 'public']), limit(60)),
       (snap) => {
         const docs = snap.docs
           .map((d) => ({ id: d.id, ...d.data() } as StudyMaterial))
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setMaterials(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'studyMaterials')
+      (err) => handleSnapshotError(err, OperationType.LIST, 'studyMaterials')
     );
 
     const unsubQuestions = onSnapshot(
-      query(collection(db, 'pastQuestions'), where('isPublic', '==', true)),
+      query(collection(db, 'pastQuestions'), where('isPublic', '==', true), limit(60)),
       (snap) => {
         const docs = snap.docs
           .map((d) => ({ id: d.id, ...d.data() } as PastQuestion))
           .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
         setPastQuestions(docs);
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'pastQuestions')
+      (err) => handleSnapshotError(err, OperationType.LIST, 'pastQuestions')
     );
 
     return () => {
@@ -173,6 +174,10 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
     .slice(0, 4);
 
   const totalStudyMinutes = studyLogs.reduce((acc, log) => acc + (log.durationMinutes || 0), 0);
+  const todayStudyMinutes = studyLogs
+    .filter((log) => log.loggedDate === todayIso)
+    .reduce((acc, log) => acc + (log.durationMinutes || 0), 0);
+  const studyStreak = computeStudyStreak(studyLogs.map((l) => l.loggedDate));
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, '0');
   const ss = String(secondsLeft % 60).padStart(2, '0');
   const totalFocusSeconds = focusMinutes * 60;
@@ -263,7 +268,7 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
             valueHover: 'group-hover:text-indigo-600 dark:group-hover:text-indigo-400',
             label: 'Logged Study Time',
             value: `${(totalStudyMinutes / 60).toFixed(1)}h`,
-            sub: `${enrollments.length} tracked courses`,
+            sub: `${studyStreak > 0 ? `${studyStreak}-day streak · ` : ''}${todayStudyMinutes}m today`,
           },
         ].map((kpi, idx) => {
           const Icon = kpi.icon;
@@ -497,6 +502,24 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
                   placeholder="Course Code (e.g. CS301)"
                   className="w-48 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-center font-mono text-xs text-slate-900 focus:border-indigo-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                 />
+                {myCourses.length > 0 && (
+                  <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+                    {myCourses.slice(0, 5).map((code) => (
+                      <button
+                        key={code}
+                        type="button"
+                        onClick={() => setFocusCourse(code)}
+                        className={`rounded-md px-2 py-0.5 font-mono text-[10px] font-semibold transition-colors ${
+                          focusCourse === code
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                        }`}
+                      >
+                        {code}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
@@ -593,6 +616,8 @@ export function OverviewPage({ onNavigate }: OverviewPageProps) {
           </div>
         </div>
       </div>
+
+      <LecturerAcknowledgement variant="compact" />
     </div>
   );
 }

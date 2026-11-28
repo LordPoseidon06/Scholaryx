@@ -370,24 +370,28 @@ export function QuizPerformanceChart({ quizAttempts, onReviewQuiz }: QuizPerform
       return best;
     };
 
+    const inspectPointer = (event: MouseEvent | TouchEvent) => {
+      const [mx, my] = d3.pointer(event);
+      const nearest = findNearest(mx, my);
+      if (!nearest) return;
+      crosshair.attr('x1', nearest.px).attr('x2', nearest.px).style('opacity', 1);
+      activeHalo
+        .attr('cx', nearest.px)
+        .attr('cy', nearest.py)
+        .attr('stroke', nearest.color)
+        .style('opacity', 0.9);
+      setHoveredPoint({
+        point: nearest.point,
+        color: nearest.color,
+        xPx: margin.left + nearest.px,
+        yPx: margin.top + nearest.py,
+      });
+    };
+
     overlay
-      .on('mousemove', (event: MouseEvent) => {
-        const [mx, my] = d3.pointer(event);
-        const nearest = findNearest(mx, my);
-        if (!nearest) return;
-        crosshair.attr('x1', nearest.px).attr('x2', nearest.px).style('opacity', 1);
-        activeHalo
-          .attr('cx', nearest.px)
-          .attr('cy', nearest.py)
-          .attr('stroke', nearest.color)
-          .style('opacity', 0.9);
-        setHoveredPoint({
-          point: nearest.point,
-          color: nearest.color,
-          xPx: margin.left + nearest.px,
-          yPx: margin.top + nearest.py,
-        });
-      })
+      .on('mousemove', (event: MouseEvent) => inspectPointer(event))
+      .on('touchstart', (event: TouchEvent) => inspectPointer(event), { passive: true })
+      .on('touchmove', (event: TouchEvent) => inspectPointer(event), { passive: true })
       .on('mouseleave', () => {
         crosshair.style('opacity', 0);
         activeHalo.style('opacity', 0);
@@ -477,7 +481,7 @@ export function QuizPerformanceChart({ quizAttempts, onReviewQuiz }: QuizPerform
       ) : (
         <div className="mt-4 space-y-4">
           {/* Course Subject Filter & Interactive Legend */}
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
             <button
               type="button"
               onClick={() => setSelectedSubject('ALL')}

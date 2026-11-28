@@ -2,8 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Camera, Check, Link2, Moon, Plus, Save, Sun, Trash2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { EASE_OUT_EXPO } from '../components/MotionPrimitives';
+import { SearchableSelectCombobox } from '../components/SearchableSelectCombobox';
 import { UserAvatar } from '../components/UserAvatar';
 import { useAuth } from '../context/AuthContext';
+import { GHANA_PROGRAMS, GHANA_UNIVERSITIES } from '../data/ghanaAcademics';
 import { compressProfileImage, isSafeAvatarUrl } from '../lib/avatar';
 import { normalizeCourseCode } from '../lib/utils';
 
@@ -26,6 +28,7 @@ export function ProfilePage() {
   const [urlDraft, setUrlDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [resetSentNotice, setResetSentNotice] = useState<string | null>(null);
   const [sendingReset, setSendingReset] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -122,6 +125,7 @@ export function ProfilePage() {
     e.preventDefault();
     setSaving(true);
     setSavedNotice(null);
+    setSaveError(null);
     try {
       await updateProfileData({
         displayName: displayName.trim() || 'University Student',
@@ -135,6 +139,8 @@ export function ProfilePage() {
         isPublic,
       });
       setSavedNotice('Profile saved and synced to the campus directory.');
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Unable to save profile changes.');
     } finally {
       setSaving(false);
     }
@@ -198,9 +204,9 @@ export function ProfilePage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept="image/*"
                 onChange={handlePhotoFileChange}
-                className="hidden"
+                className="sr-only"
               />
             </div>
 
@@ -333,35 +339,31 @@ export function ProfilePage() {
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-              University / Institution
-            </label>
-            <input
-              type="text"
-              required
-              maxLength={150}
-              value={university}
-              onChange={(e) => setUniversity(e.target.value)}
-              placeholder="e.g., University of Ghana"
-              className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-            />
-          </div>
+          <SearchableSelectCombobox
+            id="profile-university"
+            label="University / Institution (Ghana)"
+            value={university}
+            onChange={setUniversity}
+            options={GHANA_UNIVERSITIES}
+            required
+            maxLength={150}
+            allLabel="Ghanaian institutions"
+            placeholder="Search or type university (e.g., UG, KNUST, UCC)..."
+            helperText="Pick from the list, search by name/acronym, or type your own if unlisted."
+          />
 
-          <div>
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-              Degree Program / Major
-            </label>
-            <input
-              type="text"
-              required
-              maxLength={150}
-              value={program}
-              onChange={(e) => setProgram(e.target.value)}
-              placeholder="e.g., BSc Computer Science"
-              className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-            />
-          </div>
+          <SearchableSelectCombobox
+            id="profile-program"
+            label="Degree Program / Major"
+            value={program}
+            onChange={setProgram}
+            options={GHANA_PROGRAMS}
+            required
+            maxLength={150}
+            allLabel="degree programs"
+            placeholder="Search or type program (e.g., BSc Computer Science)..."
+            helperText="Search across Ghanaian programs or type your exact major."
+          />
 
           <div>
             <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
@@ -401,7 +403,7 @@ export function ProfilePage() {
           <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
             Enrolled Course Codes (used to match notes, past questions, and study peers)
           </label>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <input
               type="text"
               value={newCourse}
@@ -413,7 +415,7 @@ export function ProfilePage() {
                 }
               }}
               placeholder="e.g. CS301, MATH204"
-              className="w-60 rounded-lg border border-slate-200 bg-white px-3.5 py-2 font-mono text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="min-w-0 flex-1 sm:max-w-xs rounded-lg border border-slate-200 bg-white px-3.5 py-2 font-mono text-sm text-slate-900 uppercase focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
             <button
               type="button"
@@ -447,7 +449,7 @@ export function ProfilePage() {
           <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
             Study Interests &amp; Focus Areas
           </label>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             <input
               type="text"
               value={newInterest}
@@ -459,7 +461,7 @@ export function ProfilePage() {
                 }
               }}
               placeholder="e.g. Algorithms, Econometrics"
-              className="w-60 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="min-w-0 flex-1 sm:max-w-xs rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
             <button
               type="button"
@@ -487,8 +489,8 @@ export function ProfilePage() {
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-slate-200 pt-5 dark:border-slate-800">
-          <label className="flex items-center gap-2.5 text-sm text-slate-700 dark:text-slate-300">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 pt-5 dark:border-slate-800">
+          <label className="flex items-start sm:items-center gap-2.5 text-sm text-slate-700 dark:text-slate-300">
             <input
               type="checkbox"
               checked={isPublic}
@@ -509,6 +511,17 @@ export function ProfilePage() {
         </div>
 
         <AnimatePresence>
+          {saveError && (
+            <motion.p
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.16, ease: EASE_OUT_EXPO }}
+              className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300"
+            >
+              {saveError}
+            </motion.p>
+          )}
           {savedNotice && (
             <motion.p
               initial={{ opacity: 0, y: -4 }}

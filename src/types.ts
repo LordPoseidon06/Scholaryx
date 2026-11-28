@@ -7,7 +7,8 @@ export type NavSection =
   | 'tasks'
   | 'progress'
   | 'peers'
-  | 'profile';
+  | 'profile'
+  | 'admin';
 
 export interface UserAccount {
   uid: string;
@@ -225,4 +226,26 @@ export interface GeneratedFlashcard {
   front: string;
   back: string;
   hint: string;
+}
+
+export interface BlockedUserRecord {
+  id: string;
+  uid: string;
+  email?: string;
+  displayName?: string;
+  reason?: string;
+  blockedBy: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type AnnouncementTone = 'info' | 'warning' | 'success';
+
+export interface PlatformConfigRecord {
+  announcementTitle: string;
+  announcementBody: string;
+  announcementTone: AnnouncementTone;
+  isActive: boolean;
+  updatedBy: string;
+  updatedAt?: unknown;
 }

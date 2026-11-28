@@ -4,7 +4,7 @@ import { Check, Copy, Send, X } from 'lucide-react';
 import { ModalShell } from './MotionPrimitives';
 import { UserAvatar } from './UserAvatar';
 import { useAuth } from '../context/AuthContext';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, handleSnapshotError, OperationType } from '../lib/firebase';
 import { clampString, getConversationId } from '../lib/utils';
 import type { StudentProfile } from '../types';
 
@@ -44,7 +44,7 @@ export function ShareToPeerModal({ resource, onClose, onShared }: ShareToPeerMod
         setPeers(list);
       },
       (err) => {
-        handleFirestoreError(err, OperationType.LIST, 'profiles');
+        handleSnapshotError(err, OperationType.LIST, 'profiles');
       }
     );
     return () => unsub();

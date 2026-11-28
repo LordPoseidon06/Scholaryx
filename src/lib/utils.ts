@@ -81,6 +81,97 @@ export function formatFileSize(bytes?: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  pdf: 'application/pdf',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  markdown: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  tex: 'application/x-tex',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+};
+
+const BLOCKED_BINARY_EXTENSIONS = /\.(mp4|mov|avi|mkv|webm|mp3|wav|m4a|aac|zip|rar|7z|tar|gz|apk|exe|dmg|iso)$/i;
+
+export function inferMimeTypeFromExtension(fileName: string, rawType?: string): string {
+  const cleanRaw = (rawType || '').trim().toLowerCase();
+  if (cleanRaw && cleanRaw !== 'application/octet-stream' && cleanRaw !== 'binary/octet-stream') {
+    return cleanRaw.slice(0, 100);
+  }
+  const extMatch = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
+  if (extMatch) {
+    const mapped = EXTENSION_MIME_MAP[extMatch[1]];
+    if (mapped) return mapped;
+  }
+  return cleanRaw || 'application/octet-stream';
+}
+
+export function isPdfAttachment(opts: {
+  fileMimeType?: string;
+  fileName?: string;
+  dataUrl?: string;
+}): boolean {
+  const mime = (opts.fileMimeType || '').toLowerCase();
+  const name = (opts.fileName || '').toLowerCase();
+  const url = (opts.dataUrl || '').toLowerCase();
+  return (
+    mime === 'application/pdf' ||
+    name.endsWith('.pdf') ||
+    url.startsWith('data:application/pdf')
+  );
+}
+
+export function getGhanaAcademicStanding(averagePct: number): {
+  label: string;
+  toneClass: string;
+} {
+  if (averagePct >= 70) {
+    return { label: 'First Class Standing', toneClass: 'text-emerald-600 dark:text-emerald-400' };
+  }
+  if (averagePct >= 60) {
+    return { label: 'Second Class Upper', toneClass: 'text-blue-700 dark:text-blue-400' };
+  }
+  if (averagePct >= 50) {
+    return { label: 'Second Class Lower', toneClass: 'text-indigo-600 dark:text-indigo-400' };
+  }
+  if (averagePct >= 40) {
+    return { label: 'Pass Standing', toneClass: 'text-amber-600 dark:text-amber-400' };
+  }
+  return { label: 'Needs Support (< 40%)', toneClass: 'text-rose-600 dark:text-rose-400' };
+}
+
+export function computeStudyStreak(loggedDates: string[]): number {
+  const validDates = new Set(loggedDates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)));
+  if (validDates.size === 0) return 0;
+
+  const cursor = new Date();
+  cursor.setHours(0, 0, 0, 0);
+
+  const toIso = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  if (!validDates.has(toIso(cursor))) {
+    cursor.setDate(cursor.getDate() - 1);
+    if (!validDates.has(toIso(cursor))) return 0;
+  }
+
+  let streak = 0;
+  while (validDates.has(toIso(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -92,7 +183,13 @@ function readAsDataUrl(file: File): Promise<string> {
 
 export async function readStudyFile(file: File): Promise<ParsedUploadResult> {
   const name = file.name.slice(0, 180);
-  const mime = (file.type || 'application/octet-stream').slice(0, 100);
+  if (BLOCKED_BINARY_EXTENSIONS.test(name)) {
+    throw new Error(
+      'Please choose a study document (PDF, PowerPoint, Word, Text, Markdown) or an image of lecture slides.'
+    );
+  }
+
+  const mime = inferMimeTypeFromExtension(name, file.type);
 
   if (file.size > MAX_FILE_UPLOAD_BYTES) {
     throw new Error(
@@ -112,7 +209,7 @@ export async function readStudyFile(file: File): Promise<ParsedUploadResult> {
     const fileDataUrl = file.size > 50000 ? await readAsDataUrl(file) : undefined;
     return {
       fileName: name,
-      fileMimeType: mime || 'text/plain',
+      fileMimeType: mime === 'application/octet-stream' ? 'text/plain' : mime,
       fileSizeBytes: file.size,
       extractedText,
       fileDataUrl,
